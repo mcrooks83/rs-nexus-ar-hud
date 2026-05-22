@@ -40,7 +40,7 @@ def handle_packet(sender, data):
 
     version, flags, seq, timestamp_us, ax, ay, az, gx, gy, gz = PACKET.unpack(data)
 
-    if packet_count % 25 == 0:
+    if True: #packet_count % 25 == 0:
         elapsed = time.monotonic() - start_time
         rate = packet_count / elapsed if elapsed > 0 else 0.0
 

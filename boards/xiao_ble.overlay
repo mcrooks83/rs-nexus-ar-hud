@@ -1,0 +1,5 @@
+/*
+ * XIAO BLE Sense overlay.
+ *
+ * The Sense board variant already defines the onboard LSM6DS3TR-C IMU.
+ */

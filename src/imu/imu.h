@@ -3,13 +3,13 @@
 #include <stdint.h>
 
 /*
- * IMU sample in firmware-internal units.
- *
- * For initial bring-up this may be fake data or raw sensor counts.
- * Before app/client integration, we should lock the units to:
+ * IMU sample in packet-ready units.
  *
  *   accel: mg
- *   gyro:  mdps
+ *      1000 = 1 g
+ *
+ *   gyro: mdps
+ *      1000 = 1 degree/sec
  */
 struct imu_sample {
     int16_t accel_x;
