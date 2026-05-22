@@ -49,6 +49,7 @@ enum imu_odr_hz {
 #define CONTROL_U16_VALUE_HI_OFFSET 2
 
 #define DEVICE_STATUS_V1_SIZE_BYTES 11
+#define DEVICE_STATUS_V2_SIZE_BYTES 19
 
 static inline uint16_t control_get_le16(const uint8_t *buf)
 {

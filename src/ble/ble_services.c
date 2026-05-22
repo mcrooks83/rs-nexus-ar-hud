@@ -7,6 +7,8 @@
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gap.h>
+#include <zephyr/bluetooth/gatt.h>
+#include <zephyr/bluetooth/hci.h>
 #include <zephyr/logging/log.h>
 
 #include "app_version.h"
@@ -29,14 +31,52 @@ static const struct bt_data ad[] = {
     ),
 };
 
-static const struct bt_le_conn_param fast_conn_param = {
+/*
+ * Mirror the Arduino sketch's preferred streaming link interval.
+ * At 100 Hz a slower interval can force the link to batch notifications and
+ * increases notify-side backpressure.
+ */
+static const struct bt_le_conn_param preferred_conn_param = {
     .interval_min = 6,   /* 7.5 ms */
     .interval_max = 12,  /* 15 ms */
     .latency = 0,
-    .timeout = 400,      /* 4 s */
+    .timeout = 500,      /* 5 s */
 };
 
+static struct bt_gatt_exchange_params mtu_exchange_params;
+
+#if defined(CONFIG_BT_USER_PHY_UPDATE)
+static const struct bt_conn_le_phy_param preferred_phy = {
+    .options = BT_CONN_LE_PHY_OPT_NONE,
+    .pref_tx_phy = BT_GAP_LE_PHY_2M,
+    .pref_rx_phy = BT_GAP_LE_PHY_2M,
+};
+#endif
+
+#if defined(CONFIG_BT_USER_DATA_LEN_UPDATE)
+static const struct bt_conn_le_data_len_param preferred_data_len = {
+    .tx_max_len = CONFIG_BT_CTLR_DATA_LENGTH_MAX,
+    .tx_max_time = 2120,
+};
+#endif
+
 static struct k_work_delayable adv_restart_work;
+
+static void mtu_exchanged(
+    struct bt_conn *conn,
+    uint8_t err,
+    struct bt_gatt_exchange_params *params)
+{
+    ARG_UNUSED(conn);
+    ARG_UNUSED(params);
+
+    if (err) {
+        LOG_WRN("MTU exchange failed: %u", err);
+        return;
+    }
+
+    LOG_INF("MTU exchange complete");
+}
 
 static int start_advertising(void)
 {
@@ -95,9 +135,29 @@ static void connected(struct bt_conn *conn, uint8_t err)
 
     status_led_set_mode(STATUS_LED_MODE_CONNECTED);
 
-    update_err = bt_conn_le_param_update(conn, &fast_conn_param);
+    update_err = bt_conn_le_param_update(conn, &preferred_conn_param);
     if (update_err) {
         LOG_WRN("Connection parameter update failed: %d", update_err);
+    }
+
+#if defined(CONFIG_BT_USER_PHY_UPDATE)
+    update_err = bt_conn_le_phy_update(conn, &preferred_phy);
+    if (update_err) {
+        LOG_WRN("PHY update request failed: %d", update_err);
+    }
+#endif
+
+#if defined(CONFIG_BT_USER_DATA_LEN_UPDATE)
+    update_err = bt_conn_le_data_len_update(conn, &preferred_data_len);
+    if (update_err) {
+        LOG_WRN("Data length update request failed: %d", update_err);
+    }
+#endif
+
+    mtu_exchange_params.func = mtu_exchanged;
+    update_err = bt_gatt_exchange_mtu(conn, &mtu_exchange_params);
+    if (update_err) {
+        LOG_WRN("MTU exchange request failed: %d", update_err);
     }
 }
 

@@ -14,3 +14,5 @@ bool streamer_is_running(void);
 
 uint32_t streamer_get_packets_sent(void);
 uint32_t streamer_get_packets_dropped(void);
+uint32_t streamer_get_imu_read_failures(void);
+uint32_t streamer_get_notify_failures(void);

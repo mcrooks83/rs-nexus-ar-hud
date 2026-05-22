@@ -13,7 +13,7 @@
 
 LOG_MODULE_REGISTER(device_control_svc, LOG_LEVEL_INF);
 
-static uint8_t status_buf[DEVICE_STATUS_V1_SIZE_BYTES];
+static uint8_t status_buf[DEVICE_STATUS_V2_SIZE_BYTES];
 
 static void put_u16_le(uint8_t *buf, uint16_t value)
 {
@@ -36,6 +36,8 @@ static void build_status(void)
     put_u16_le(&status_buf[1], streamer_get_odr_hz());
     put_u32_le(&status_buf[3], streamer_get_packets_sent());
     put_u32_le(&status_buf[7], streamer_get_packets_dropped());
+    put_u32_le(&status_buf[11], streamer_get_imu_read_failures());
+    put_u32_le(&status_buf[15], streamer_get_notify_failures());
 }
 
 static ssize_t read_status(
