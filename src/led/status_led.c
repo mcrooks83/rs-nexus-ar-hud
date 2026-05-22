@@ -299,7 +299,7 @@ void status_led_set_mode(enum status_led_mode mode)
 void status_led_identify(uint16_t duration_ms)
 {
     if (duration_ms == 0) {
-        duration_ms = 1000;
+        duration_ms = 5000;
     }
 
     if (!identify_active) {

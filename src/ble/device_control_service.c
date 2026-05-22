@@ -122,13 +122,13 @@ static ssize_t write_command(
     }
 
     case CTRL_IDENTIFY: {
-        uint16_t duration_ms;
+        uint16_t duration_ms = 5000;
 
-        if (len != CONTROL_IDENTIFY_SIZE_BYTES) {
+        if (len == CONTROL_IDENTIFY_SIZE_BYTES) {
+            duration_ms = control_get_le16(bytes);
+        } else if (len != 1) {
             return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
         }
-
-        duration_ms = control_get_le16(bytes);
 
         status_led_identify(duration_ms);
 

@@ -19,6 +19,7 @@ CONTROL_COMMAND_UUID = "8e410002-f315-4f60-9fb8-838830daea50"
 CTRL_START = 0x01
 CTRL_STOP = 0x02
 CTRL_SET_ODR = 0x03
+CTRL_IDENTIFY = 0x04
 
 PACKET = struct.Struct("<BBHIhhhhhh")
 
@@ -84,6 +85,14 @@ async def main():
             struct.pack("<BH", CTRL_SET_ODR, 100),
             response=True,
         )
+
+        print("Identifying for 5 seconds")
+        await client.write_gatt_char(
+            CONTROL_COMMAND_UUID,
+            bytes([CTRL_IDENTIFY]),
+            response=True,
+        )
+        await asyncio.sleep(6.0)
 
         print("Starting stream")
         await client.write_gatt_char(
