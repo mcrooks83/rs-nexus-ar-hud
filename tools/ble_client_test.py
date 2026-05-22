@@ -6,6 +6,11 @@ import time
 
 from bleak import BleakClient, BleakScanner
 
+CONNECT_SETTLE_S = 2.0
+PRE_START_S = 2.0
+STREAM_S = 10.0
+POST_STOP_S = 2.0
+
 DEVICE_NAME = "Nexus N3 Dot"
 
 IMU_MEASUREMENT_UUID = "8e400002-f315-4f60-9fb8-838830daea50"
@@ -64,9 +69,14 @@ async def main():
 
     async with BleakClient(device) as client:
         print("Connected")
+        print(f"Sleeping {CONNECT_SETTLE_S:.1f}s after connect")
+        await asyncio.sleep(CONNECT_SETTLE_S)
 
         print("Subscribing to IMU notifications")
         await client.start_notify(IMU_MEASUREMENT_UUID, handle_packet)
+
+        print(f"Sleeping {PRE_START_S:.1f}s before START")
+        await asyncio.sleep(PRE_START_S)
 
         print("Setting ODR to 100 Hz")
         await client.write_gatt_char(
@@ -82,7 +92,8 @@ async def main():
             response=True,
         )
 
-        await asyncio.sleep(10)
+        print(f"Streaming for {STREAM_S:.1f}s")
+        await asyncio.sleep(STREAM_S)
 
         print("Stopping stream")
         await client.write_gatt_char(
@@ -91,10 +102,15 @@ async def main():
             response=True,
         )
 
+        print(f"Sleeping {POST_STOP_S:.1f}s after STOP")
+        await asyncio.sleep(POST_STOP_S)
+
+        print("Unsubscribing from IMU notifications")
         await client.stop_notify(IMU_MEASUREMENT_UUID)
 
-    print("Disconnected")
+        print("Disconnecting...")
 
+    print("Disconnected")
 
 if __name__ == "__main__":
     asyncio.run(main())

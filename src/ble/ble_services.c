@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <errno.h>
 
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
@@ -12,6 +13,7 @@
 #include "device_control_service.h"
 #include "imu_measurement_service.h"
 #include "status_led.h"
+#include "streamer.h"
 
 LOG_MODULE_REGISTER(ble_services, LOG_LEVEL_INF);
 
@@ -33,6 +35,48 @@ static const struct bt_le_conn_param fast_conn_param = {
     .latency = 0,
     .timeout = 400,      /* 4 s */
 };
+
+static struct k_work_delayable adv_restart_work;
+
+static int start_advertising(void)
+{
+    int err;
+
+    err = bt_le_adv_start(
+        BT_LE_ADV_CONN_FAST_1,
+        ad,
+        ARRAY_SIZE(ad),
+        NULL,
+        0
+    );
+
+    if (err == -EALREADY) {
+        return 0;
+    }
+
+    if (err) {
+        LOG_ERR("Advertising failed: %d", err);
+        return err;
+    }
+
+    status_led_set_mode(STATUS_LED_MODE_DISCOVERY);
+
+    LOG_INF("Advertising as %s", CONFIG_BT_DEVICE_NAME);
+
+    return 0;
+}
+
+static void adv_restart_work_handler(struct k_work *work)
+{
+    int err;
+
+    ARG_UNUSED(work);
+
+    err = start_advertising();
+    if (err) {
+        LOG_ERR("Delayed advertising restart failed: %d", err);
+    }
+}
 
 static void connected(struct bt_conn *conn, uint8_t err)
 {
@@ -70,7 +114,14 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
         current_conn = NULL;
     }
 
+    streamer_stop();
+
     status_led_set_mode(STATUS_LED_MODE_DISCOVERY);
+
+    /*
+     * Restart advertising shortly after the disconnect callback returns.
+     */
+    k_work_reschedule(&adv_restart_work, K_MSEC(250));
 }
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {
@@ -97,6 +148,8 @@ int ble_services_init(void)
 {
     int err;
 
+    k_work_init_delayable(&adv_restart_work, adv_restart_work_handler);
+
     /*
      * The custom GATT services are statically registered by
      * BT_GATT_SERVICE_DEFINE(), but call init hooks anyway so future
@@ -108,6 +161,8 @@ int ble_services_init(void)
         return err;
     }
 
+    
+
     err = bt_enable(NULL);
     if (err) {
         LOG_ERR("bt_enable failed: %d", err);
@@ -116,21 +171,5 @@ int ble_services_init(void)
 
     LOG_INF("Bluetooth enabled");
 
-    err = bt_le_adv_start(
-        BT_LE_ADV_CONN_FAST_1,
-        ad,
-        ARRAY_SIZE(ad),
-        NULL,
-        0
-    );
-    if (err) {
-        LOG_ERR("Advertising failed: %d", err);
-        return err;
-    }
-
-    status_led_set_mode(STATUS_LED_MODE_DISCOVERY);
-
-    LOG_INF("Advertising as %s", APP_DEVICE_NAME);
-
-    return 0;
+    return start_advertising();
 }
