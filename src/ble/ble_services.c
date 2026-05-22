@@ -1,0 +1,136 @@
+#include "ble_services.h"
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/gap.h>
+#include <zephyr/logging/log.h>
+
+#include "app_version.h"
+#include "device_control_service.h"
+#include "imu_measurement_service.h"
+#include "status_led.h"
+
+LOG_MODULE_REGISTER(ble_services, LOG_LEVEL_INF);
+
+static struct bt_conn *current_conn;
+static bool notifications_enabled;
+
+static const struct bt_data ad[] = {
+    BT_DATA_BYTES(BT_DATA_FLAGS, BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR),
+    BT_DATA(
+        BT_DATA_NAME_COMPLETE,
+        APP_DEVICE_NAME,
+        sizeof(APP_DEVICE_NAME) - 1
+    ),
+};
+
+static const struct bt_le_conn_param fast_conn_param = {
+    .interval_min = 6,   /* 7.5 ms */
+    .interval_max = 12,  /* 15 ms */
+    .latency = 0,
+    .timeout = 400,      /* 4 s */
+};
+
+static void connected(struct bt_conn *conn, uint8_t err)
+{
+    int update_err;
+
+    if (err) {
+        LOG_WRN("Connection failed: %u", err);
+        status_led_set_mode(STATUS_LED_MODE_DISCOVERY);
+        return;
+    }
+
+    current_conn = bt_conn_ref(conn);
+    notifications_enabled = false;
+
+    LOG_INF("Connected");
+
+    status_led_set_mode(STATUS_LED_MODE_CONNECTED);
+
+    update_err = bt_conn_le_param_update(conn, &fast_conn_param);
+    if (update_err) {
+        LOG_WRN("Connection parameter update failed: %d", update_err);
+    }
+}
+
+static void disconnected(struct bt_conn *conn, uint8_t reason)
+{
+    ARG_UNUSED(conn);
+
+    LOG_INF("Disconnected: %u", reason);
+
+    notifications_enabled = false;
+
+    if (current_conn) {
+        bt_conn_unref(current_conn);
+        current_conn = NULL;
+    }
+
+    status_led_set_mode(STATUS_LED_MODE_DISCOVERY);
+}
+
+BT_CONN_CB_DEFINE(conn_callbacks) = {
+    .connected = connected,
+    .disconnected = disconnected,
+};
+
+void ble_services_set_notifications_enabled(bool enabled)
+{
+    notifications_enabled = enabled;
+}
+
+bool ble_services_notifications_enabled(void)
+{
+    return current_conn && notifications_enabled;
+}
+
+struct bt_conn *ble_services_get_conn(void)
+{
+    return current_conn;
+}
+
+int ble_services_init(void)
+{
+    int err;
+
+    /*
+     * The custom GATT services are statically registered by
+     * BT_GATT_SERVICE_DEFINE(), but call init hooks anyway so future
+     * service-specific setup has a home.
+     */
+    err = device_control_service_init();
+    if (err) {
+        LOG_ERR("device_control_service_init failed: %d", err);
+        return err;
+    }
+
+    err = bt_enable(NULL);
+    if (err) {
+        LOG_ERR("bt_enable failed: %d", err);
+        return err;
+    }
+
+    LOG_INF("Bluetooth enabled");
+
+    err = bt_le_adv_start(
+        BT_LE_ADV_CONN_FAST_1,
+        ad,
+        ARRAY_SIZE(ad),
+        NULL,
+        0
+    );
+    if (err) {
+        LOG_ERR("Advertising failed: %d", err);
+        return err;
+    }
+
+    status_led_set_mode(STATUS_LED_MODE_DISCOVERY);
+
+    LOG_INF("Advertising as %s", APP_DEVICE_NAME);
+
+    return 0;
+}
