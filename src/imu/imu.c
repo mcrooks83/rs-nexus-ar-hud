@@ -10,8 +10,8 @@
 #include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(imu, LOG_LEVEL_INF);
-
-#define IMU_NODE DT_NODELABEL(lsm6ds3tr_c)
+// this is the devicetree node label for the IMU sensor, defined in the devicetree overlay file
+#define IMU_NODE DT_NODELABEL(lsm6ds3tr_c) 
 
 #define GYRO_CALIBRATION_DISCARD_SAMPLES 64
 #define GYRO_CALIBRATION_SAMPLES 256
@@ -26,12 +26,14 @@ static bool gyro_calibrated;
 #error "LSM6DS3TR-C IMU node is not okay in devicetree"
 #endif
 
+// zephr device object for the IMU sensor
 static const struct device *imu_dev = DEVICE_DT_GET(IMU_NODE);
 
-static uint16_t current_odr_hz = 100;
+static uint16_t current_odr_hz = 100; //sensor output data rate in Hz, default to 100Hz
 
 static int rs_sensor_value_to_milli(const struct sensor_value *val)
 {
+    // sensor_value is a zephr convention for representing a value as val1 + val2 * 10^(-6)
     return (int)((int64_t)val->val1 * 1000 + val->val2 / 1000);
 }
 
@@ -153,9 +155,10 @@ static int calibrate_gyro_bias(void)
     return 0;
 }
 
+// configure the output data rate of the sensor on the device
 static int configure_odr(uint16_t requested_odr_hz)
 {
-    struct sensor_value odr;
+    struct sensor_value odr;  //dont know why we use this?
     int err;
 
     switch (requested_odr_hz) {
@@ -252,6 +255,7 @@ int imu_init(void)
     return 0;
 }
 
+// this is a higher level function provided to calling code to set the odr
 int imu_set_odr_hz(uint16_t odr_hz)
 {
     int err;
@@ -291,6 +295,7 @@ int imu_set_odr_hz(uint16_t odr_hz)
     return 0;
 }
 
+// read the imu
 int imu_read(struct imu_sample *sample)
 {
     struct sensor_value accel[3];
@@ -306,7 +311,7 @@ int imu_read(struct imu_sample *sample)
     if (!sample) {
         return -EINVAL;
     }
-
+    //this is a blocking call
     err = sensor_sample_fetch(imu_dev);
     if (err) {
         LOG_WRN("sensor_sample_fetch failed: %d", err);
@@ -334,6 +339,9 @@ int imu_read(struct imu_sample *sample)
      *   mg = m/s^2 * 1000 / 9.80665
      *
      * sensor_value_to_milli() gives milli m/s^2.
+     * 
+     * This is done to fit the value into an int and reduce the size of the data packet sent over BLE. 
+     * The conversion factor is approximate to avoid floating point arithmetic.
      */
     ax_mg = rs_sensor_value_to_milli(&accel[0]) * 1000 / 9807;
     ay_mg = rs_sensor_value_to_milli(&accel[1]) * 1000 / 9807;
@@ -368,6 +376,8 @@ int imu_read(struct imu_sample *sample)
     gy_mdps = gy_mdps_32;
     gz_mdps = gz_mdps_32;
 
+
+    // writhe the data into the sample struct, clamping to int16_t range
     sample->accel_x = (int16_t)clamp_i16(ax_mg);
     sample->accel_y = (int16_t)clamp_i16(ay_mg);
     sample->accel_z = (int16_t)clamp_i16(az_mg);
