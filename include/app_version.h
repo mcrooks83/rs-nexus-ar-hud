@@ -12,4 +12,4 @@
 
 #define APP_VERSION_STRING "0.1.0"
 
-#define APP_DEVICE_NAME "Nexus N3 Dot"
+#define APP_DEVICE_NAME "Nexus AR HUD"

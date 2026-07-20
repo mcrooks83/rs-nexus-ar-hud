@@ -1,0 +1,30 @@
+mainmenu "RS Nexus AR HUD"
+
+menu "Wi-Fi manager"
+
+config WIFI_MANAGER_SSID
+    string "Wi-Fi SSID"
+    default ""
+
+config WIFI_MANAGER_PSK
+    string "Wi-Fi password"
+    default ""
+
+config WIFI_MANAGER_OPEN_NETWORK
+    bool "Use an open Wi-Fi network"
+    default n
+
+config WIFI_MANAGER_LOG_LEVEL
+    int "Wi-Fi manager log level"
+    range 0 4
+    default 3
+    help
+      0 = disabled
+      1 = error
+      2 = warning
+      3 = information
+      4 = debug
+
+endmenu
+
+source "Kconfig.zephyr"

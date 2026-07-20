@@ -1,44 +1,70 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
-#include "app_version.h"
-#include "ble_services.h"
-#include "status_led.h"
-#include "imu.h"
-#include "streamer.h"
+#include "button_manager.h"
+#include "display_manager.h"
+#include "vibration_manager.h"
 
 LOG_MODULE_REGISTER(app, LOG_LEVEL_INF);
 
+static void handle_button_press(void)
+{
+    int err = vibration_manager_pulse(500);
+
+    if (err != 0) {
+        LOG_ERR("Vibration pulse failed: %d", err);
+    }
+}
+
 int main(void)
 {
-    int err;
+    LOG_INF("Starting Nexus AR HUD firmware 0.1.0");
 
-    LOG_INF("Starting %s firmware %s", APP_DEVICE_NAME, APP_VERSION_STRING);
+    int err = vibration_manager_init();
 
-    err = status_led_init();
-    if (err) {
-        LOG_WRN("status_led_init failed: %d", err);
+    if (err != 0) {
+        LOG_ERR(
+            "Vibration motor init failed: %d",
+            err
+        );
+
+        return err;
     }
 
-    err = imu_init();
-    if (err) {
-        LOG_ERR("imu_init failed: %d", err);
-        return 0;
+    err = button_manager_init(handle_button_press);
+
+    if (err != 0) {
+        LOG_ERR("Button init failed: %d", err);
+        return err;
     }
 
-    status_led_set_mode(STATUS_LED_MODE_DISCOVERY);
+    err = display_manager_init();
 
-    streamer_init();
+    if (err != 0) {
+        LOG_ERR(
+            "Display initialization failed: %d",
+            err
+        );
 
-    err = ble_services_init();
-    if (err) {
-        LOG_ERR("ble_services_init failed: %d", err);
-        return 0;
+        return err;
     }
 
-    LOG_INF("Ready");
+    err = display_manager_start_marquee(
+        "NEXUS N3 AR HUD"
+    );
 
-    while (1) {
+    if (err != 0) {
+        LOG_ERR(
+            "Failed to start display marquee: %d",
+            err
+        );
+
+        return err;
+    }
+
+    LOG_INF("Press the button to trigger vibration");
+
+    while (true) {
         k_sleep(K_FOREVER);
     }
 
