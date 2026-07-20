@@ -3,16 +3,32 @@
 
 #include "button_manager.h"
 #include "display_manager.h"
+#include "dummy_nexus_client.h"
+#include "hud_state_machine.h"
 #include "vibration_manager.h"
 
 LOG_MODULE_REGISTER(app, LOG_LEVEL_INF);
 
 static void handle_button_press(void)
 {
-    int err = vibration_manager_pulse(500);
+    /*
+     * This currently does nothing because the state-machine
+     * single-press behavior has not yet been implemented.
+     */
+    hud_state_machine_handle_single_press();
+}
 
-    if (err != 0) {
-        LOG_ERR("Vibration pulse failed: %d", err);
+static void handle_nexus_event(
+    const struct hud_event *event
+)
+{
+    int error = hud_state_machine_handle_event(event);
+
+    if (error != 0) {
+        LOG_ERR(
+            "Failed to handle dummy Nexus event: %d",
+            error
+        );
     }
 }
 
@@ -20,52 +36,69 @@ int main(void)
 {
     LOG_INF("Starting Nexus AR HUD firmware 0.1.0");
 
-    int err = vibration_manager_init();
+    int error = vibration_manager_init();
 
-    if (err != 0) {
+    if (error != 0) {
         LOG_ERR(
-            "Vibration motor init failed: %d",
-            err
+            "Vibration manager initialization failed: %d",
+            error
         );
 
-        return err;
+        return error;
     }
 
-    err = button_manager_init(handle_button_press);
+    error = display_manager_init();
 
-    if (err != 0) {
-        LOG_ERR("Button init failed: %d", err);
-        return err;
-    }
-
-    err = display_manager_init();
-
-    if (err != 0) {
+    if (error != 0) {
         LOG_ERR(
-            "Display initialization failed: %d",
-            err
+            "Display manager initialization failed: %d",
+            error
         );
 
-        return err;
+        return error;
     }
 
-    // test the scrolling display
-    err = display_manager_start_marquee(
-        "NEXUS N3 AR HUD"
+    error = hud_state_machine_init(
+        dummy_nexus_client_send_command
     );
 
-    if (err != 0) {
+    if (error != 0) {
         LOG_ERR(
-            "Failed to start display marquee: %d",
-            err
+            "HUD state machine initialization failed: %d",
+            error
         );
 
-        return err;
+        return error;
     }
 
-    LOG_INF("Press the button to trigger vibration");
+    error = button_manager_init(
+        handle_button_press
+    );
 
-    // forever loop for testing.
+    if (error != 0) {
+        LOG_ERR(
+            "Button manager initialization failed: %d",
+            error
+        );
+
+        return error;
+    }
+
+    error = dummy_nexus_client_start(
+        handle_nexus_event
+    );
+
+    if (error != 0) {
+        LOG_ERR(
+            "Dummy Nexus client failed to start: %d",
+            error
+        );
+
+        return error;
+    }
+
+    LOG_INF("Nexus AR HUD initialized");
+
     while (true) {
         k_sleep(K_FOREVER);
     }

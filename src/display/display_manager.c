@@ -310,3 +310,81 @@ int display_manager_start_marquee(const char *text)
 
     return 0;
 }
+
+int display_manager_show_lines(
+    const char *line1,
+    const char *line2,
+    const char *line3,
+    const char *line4
+)
+{
+    const char *lines[] = {
+        line1,
+        line2,
+        line3,
+        line4,
+    };
+
+    int err = cfb_framebuffer_clear(
+        display,
+        false
+    );
+
+    if (err != 0) {
+        LOG_ERR(
+            "Failed to clear framebuffer: %d",
+            err
+        );
+
+        return err;
+    }
+
+    for (size_t index = 0;
+         index < ARRAY_SIZE(lines);
+         ++index) {
+
+        if (lines[index] == NULL ||
+            lines[index][0] == '\0') {
+            continue;
+        }
+
+        int y =
+            (int)index * (int)font_height;
+
+        /*
+         * Stop if the next line would begin outside the
+         * physical display.
+         */
+        if (y >= (int)display_height) {
+            break;
+        }
+
+        err = cfb_draw_text(
+            display,
+            lines[index],
+            0,
+            y
+        );
+
+        if (err != 0) {
+            LOG_ERR(
+                "Failed to draw line %u: %d",
+                (unsigned int)index,
+                err
+            );
+
+            return err;
+        }
+    }
+
+    err = cfb_framebuffer_finalize(display);
+
+    if (err != 0) {
+        LOG_ERR(
+            "Failed to update display: %d",
+            err
+        );
+    }
+
+    return err;
+}

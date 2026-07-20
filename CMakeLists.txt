@@ -9,6 +9,8 @@ target_include_directories(app PRIVATE
     src/vibration
     src/button
     src/display
+    src/state_machine
+    src/dummy
 )
 
 target_sources(app PRIVATE
@@ -17,4 +19,6 @@ target_sources(app PRIVATE
     src/vibration/vibration_manager.c
     src/button/button_manager.c
     src/display/display_manager.c
+    src/state_machine/hud_state_machine.c
+    src/dummy/dummy_nexus_client.c
 )
