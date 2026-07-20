@@ -49,6 +49,7 @@ int main(void)
         return err;
     }
 
+    // test the scrolling display
     err = display_manager_start_marquee(
         "NEXUS N3 AR HUD"
     );
@@ -64,6 +65,7 @@ int main(void)
 
     LOG_INF("Press the button to trigger vibration");
 
+    // forever loop for testing.
     while (true) {
         k_sleep(K_FOREVER);
     }
