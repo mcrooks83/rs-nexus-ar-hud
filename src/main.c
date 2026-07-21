@@ -6,6 +6,7 @@
 #include "dummy_nexus_client.h"
 #include "hud_state_machine.h"
 #include "vibration_manager.h"
+#include "wifi_manager.h"
 
 LOG_MODULE_REGISTER(app, LOG_LEVEL_INF);
 
@@ -36,7 +37,36 @@ int main(void)
 {
     LOG_INF("Starting Nexus AR HUD firmware 0.1.0");
 
-    int error = vibration_manager_init();
+    int error = wifi_manager_init();
+
+    if (error != 0 ){
+        LOG_ERR(
+            "Wifi manager initialization failed: %d",
+            error
+        );
+        return error;
+    }
+
+    LOG_INF("Waiting for Wi-Fi driver initialization");
+    k_sleep(K_SECONDS(3));
+
+    error = wifi_manager_connect();
+
+    if (error != 0) {
+        LOG_ERR("Wi-Fi connection request failed: %d", error);
+        return error;
+    }
+
+    error = wifi_manager_wait_ready(K_SECONDS(40));
+
+    if (error != 0) {
+        LOG_ERR("Wi-Fi did not become ready: %d", error);
+        return error;
+    }
+
+    LOG_INF("Wi-Fi is ready");
+
+    error = vibration_manager_init();
 
     if (error != 0) {
         LOG_ERR(

@@ -60,3 +60,5 @@ JLink.log
 JLinkRTTViewer.log
 RTT*.log
 EOF
+
+wifi_credentials.conf

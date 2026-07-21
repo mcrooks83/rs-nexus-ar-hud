@@ -10,4 +10,6 @@ west blobs fetch hal_espressif
 west build -p always \
   -b xiao_esp32s3/esp32s3/procpu/sense \
   "$APP" \
-  --build-dir "$APP/build"
+  --build-dir "$APP/build" \
+  -- \
+  -DEXTRA_CONF_FILE="$APP/wifi_credentials.conf"
