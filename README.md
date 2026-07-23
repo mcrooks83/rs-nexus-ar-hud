@@ -1,4 +1,4 @@
-# Nexus AR HUD
+# Nexus N3 AR HUD
 
 `rs-nexus-ar-hud` is an experimental work in progress.
 
