@@ -1,0 +1,19 @@
+{
+  "type": "sensor_connected",
+  "payload": {
+    "operation_complete": true,
+    "subjects": [
+      {
+        "subject_id": "subject-01",
+        "connected_sensors": [
+          {
+            "address": "AA:BB:CC:DD:EE:01",
+            "location": "LEFT_ANKLE",
+            "status": "CONNECTED",
+            "setup_complete": true
+          }
+        ]
+      }
+    ]
+  }
+}

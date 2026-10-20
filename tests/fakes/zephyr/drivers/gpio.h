@@ -6,6 +6,7 @@
 #define DT_NODE_HAS_STATUS(n, s) 1
 #define GPIO_DT_SPEC_GET(n, prop) {0}
 #define GPIO_INPUT 1
+#define GPIO_OUTPUT_INACTIVE 0
 #define GPIO_INT_EDGE_BOTH 2
 struct device { int unused; };
 struct gpio_callback { int unused; };
@@ -22,4 +23,7 @@ static inline void gpio_init_callback(struct gpio_callback *c,
 { (void)c; (void)fn; (void)pins; }
 static inline int gpio_add_callback(struct device *d, struct gpio_callback *c)
 { (void)d; (void)c; return 0; }
+extern int test_output;
+static inline int gpio_pin_set_dt(const struct gpio_dt_spec *s, int value)
+{ (void)s; test_output = value; return 0; }
 #endif

@@ -1,0 +1,57 @@
+{
+  "type": "compute_result",
+  "site": "master",
+  "payload": {
+    "subject_id": "subject-01",
+    "address": "AA:BB:CC:DD:EE:01",
+    "sensor_id": "AA:BB:CC:DD:EE:01",
+    "location": "LEFT_ANKLE",
+    "algorithm_name": "standard_loading_intensity",
+    "result": {
+      "address": "AA:BB:CC:DD:EE:01",
+      "stage": "real_time",
+      "result_count": 1,
+      "algorithm_name": "standard_loading_intensity",
+      "subject_id": "subject-01",
+      "location": "LEFT_ANKLE",
+      "frequency_band_results": [
+        {
+          "band_name": "6-10",
+          "axis_values": {
+            "x": 1.2,
+            "y": 3.4,
+            "z": 8.7,
+            "mag": 99
+          }
+        },
+        {
+          "band_name": "0-6",
+          "axis_values": {
+            "x": 1.2,
+            "y": 3.4,
+            "z": 8.7,
+            "mag": 0
+          }
+        },
+        {
+          "band_name": "0-3",
+          "axis_values": {
+            "x": 1.2,
+            "y": 3.4,
+            "z": 8.7,
+            "mag": 99
+          }
+        },
+        {
+          "band_name": "3-6",
+          "axis_values": {
+            "x": 1.2,
+            "y": 3.4,
+            "z": 8.7,
+            "mag": 99
+          }
+        }
+      ]
+    }
+  }
+}

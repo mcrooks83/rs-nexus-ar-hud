@@ -1,5 +1,6 @@
 #include "hud_state_machine.h"
 #include "display_manager.h"
+#include "vibration_manager.h"
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/atomic.h>
@@ -10,7 +11,17 @@ static K_THREAD_STACK_DEFINE(controller_stack, 3072);
 static struct k_thread controller_thread;
 static atomic_t overflow;
 static struct hud_model model;
-static hud_send_command_fn send_command;
+static void process_event(const struct hud_event *event)
+{
+    int err = hud_model_apply(&model, event, k_uptime_get());
+    if (err == -ENOENT) LOG_WRN("Event rejected: subject or sensor is not registered");
+    else if (err == -ENOSPC) LOG_WRN("Event rejected: HUD supports one subject and two sensors");
+    else if (err) LOG_WRN("Event %d rejected: %d", event->type, err);
+    if (!err && model.pulse) {
+        int pulse_err = vibration_manager_pulse(50);
+        if (pulse_err) LOG_WRN("Vibration failed: %d", pulse_err);
+    }
+}
 static void controller(void *a, void *b, void *c)
 {
     ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
@@ -31,20 +42,13 @@ static void controller(void *a, void *b, void *c)
         struct hud_event event;
         /* Timeout supplies blink and sample-age ticks, never sleeps a callback. */
         if (!k_msgq_get(&hud_events, &event, K_MSEC(500))) {
-            int err = hud_model_apply(&model, &event, k_uptime_get());
-            if (err) LOG_WRN("Event %d rejected: %d", event.type, err);
-            if (model.outgoing != HUD_CMD_NONE && send_command(model.outgoing)) {
-                const struct hud_event fault = {.type = HUD_EVENT_ERROR,
-                                                 .message = "Send failed"};
-                hud_model_apply(&model, &fault, k_uptime_get());
-            }
+            process_event(&event);
         }
     }
 }
 int hud_state_machine_init(bool dummy, hud_send_command_fn send)
 {
-    if (!send) return -EINVAL;
-    send_command = send;
+    ARG_UNUSED(send); /* No command transmission in this phase. */
     hud_model_init(&model, dummy);
     k_thread_create(&controller_thread, controller_stack,
                     K_THREAD_STACK_SIZEOF(controller_stack), controller,

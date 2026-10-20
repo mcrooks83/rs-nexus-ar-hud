@@ -1,47 +1,64 @@
 # Nexus N3 AR HUD
 
-`rs-nexus-ar-hud` is an experimental work in progress.
+Experimental Zephyr firmware for the XIAO ESP32S3 Sense, a 128x64 SSD1306,
+physical button and vibration motor. The default build now receives real NEIA
+events for one subject and two Movella DOTs using `standard_loading_intensity`.
 
-The goal of this project is to provide a simple augmented reality display for viewing computed outputs produced by the Nexus N3 edge software.
+Power the HUD on **before** initializing the session in the NEIA UI. Initialize,
+connect sensors and start/stop through that UI. The HUD sends no Core commands;
+a button press cycles local sensor views, including slots with `No events`.
 
-The repository currently contains Zephyr firmware targeting the XIAO ESP32S3 Sense, with support for:
+## Connection and configuration
 
-- Wi-Fi connectivity
-- a 128x64 SSD1306 OLED display
-- a physical button input
-- independent Wi-Fi and Nexus indicators with clear text labels
-- Nexus lifecycle/result screens and asynchronous simulated start/stop control
+The default endpoint is `ws://<DHCP-gateway>:8050/api/v1/gateway/events`.
+When the master hosts both the AP and NEIA, connect to its AP and the HUD derives
+the destination automatically. No master IP needs to be entered. The gateway is
+resolved again after reconnecting. Without a usable gateway, the HUD stays
+responsive and retries.
 
-This HUD is intended to pair with `nexus-n3-core`, the edge-processing component that generates the session and compute data shown in the display:
+Kconfig settings (defaults):
 
-- [Nexus-N3/nexus-n3-core](https://github.com/Nexus-N3/nexus-n3-core)
+```text
+CONFIG_NEXUS_HOST=""
+CONFIG_NEXUS_PORT=8050
+CONFIG_NEXUS_PATH="/api/v1/gateway/events"
+CONFIG_NEXUS_DUMMY=n
+```
 
-That repository is not public yet, but it is expected to open soon.
+For NEIA elsewhere, set `NEXUS_HOST` to an IPv4 address or DNS name without a
+scheme/path/port. This overrides DHCP gateway discovery. Plain IPv4 WebSocket is
+the implemented transport; TLS/authentication, snapshots and replay are outside
+this phase. No bridge, direct ZeroMQ or Core/NEIA changes are needed.
 
-## Status
+`NEXUS_DUMMY=y` instead builds the asynchronous simulated source; its content
+is visibly prefixed `Demo`. Only one source is linked. It runs an automatic
+lifecycle/results demonstration; buttons never transmit commands in either mode.
 
-This project is still an experimental prototype.
+## Display and feedback
 
-The firmware uses a simulated Nexus event source and command destination.
-The OLED starts before Wi-Fi and remains usable without an access point. The status row uses `Wi-Fi` and `N3` labels.
-`Demo` in the content area identifies simulated screens and results.
+Row 1 always shows `Wi-Fi` and `N3` with hollow, blinking or solid circles.
+Wi-Fi becomes solid only with an IP; N3 means the real WebSocket is connected,
+which does not prove that Core is streaming. Rows 2–4 show the selected location,
+`LI 0-6 Hz`, and magnitude or exactly `No events`. Connection loss preserves
+slots/values and marks retained results stale. Lifecycle screens show warm-up,
+finalization and errors; a press lets you inspect sensor slots during warm-up. Error and finalization
+screens stay visible until the lifecycle changes.
+Every accepted real-time result requests a nonblocking 50 ms vibration pulse,
+even for the nonselected sensor. Closely spaced pulses merge.
 
-Wi-Fi automatically retries after failure or loss with 1, 2, 4, 8, then
-15-second maximum backoff. Obtaining an IP resets backoff; association/DHCP has
-a 45-second attempt deadline. One Wi-Fi worker owns recovery independently of
-the OLED and button handlers.
+The OLED/controller start before Wi-Fi. Its existing one-worker recovery uses
+1, 2, 4, 8, then 15-second maximum backoff and a 45-second association/DHCP
+deadline. The independent WebSocket worker reconnects with bounded backoff.
 
-Single press starts from Ready or stops during startup/streaming. Double press
-cycles left/right sensor views while streaming, without sending stop. Single
-presses are deferred for 350 ms to distinguish the gestures. Lifecycle events
-confirm command effects; pending commands do not imply acquisition has changed.
+## Build and test
 
-Real transport is pending. No bridge, ZeroMQ client or WebSocket connection is
-implemented. See [design.md](design.md) for screens, ownership, controls and
-hardware acceptance checks. Run `bash tests/run.sh` for focused host tests and
-`bash build.sh` for the existing Zephyr build workflow.
+Run `bash tests/run.sh` for focused sanitizer-enabled parser/model/controller,
+WebSocket assembly/gateway, vibration, button and Wi-Fi tests. Run
+`bash build.sh` for the existing Zephyr board/overlay/credentials build workflow.
+[design.md](design.md) describes cache overrides, limits, contracts and the full
+hardware procedure.
 
-## Notes
-
-- Scope and integration details may change as `nexus-n3-core` is finalized for public release.
-- The current implementation is focused on proving the embedded HUD experience and state presentation on-device.
+There is no replay: initialization and sensor registration emitted while the
+HUD is offline cannot be reconstructed automatically. The first workflow assumes
+subscription before session setup. This is a prototype; radio/socket timing,
+OLED appearance and motor cues still need hardware verification.

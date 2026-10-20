@@ -11,6 +11,7 @@ target_include_directories(app PRIVATE
     src/display
     src/state_machine
     src/dummy
+    src/nexus
 )
 
 target_sources(app PRIVATE
@@ -21,5 +22,12 @@ target_sources(app PRIVATE
     src/display/display_manager.c
     src/state_machine/hud_model.c
     src/state_machine/hud_state_machine.c
-    src/dummy/dummy_nexus_client.c
+    src/vibration/vibration_manager.c
+    src/nexus/nexus_event_parser.c
+    src/nexus/nexus_receive.c
 )
+if(CONFIG_NEXUS_DUMMY)
+    target_sources(app PRIVATE src/dummy/dummy_nexus_client.c)
+else()
+    target_sources(app PRIVATE src/nexus/nexus_client.c)
+endif()

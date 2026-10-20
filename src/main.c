@@ -3,7 +3,12 @@
 
 #include "button_manager.h"
 #include "display_manager.h"
+#include "vibration_manager.h"
+#if defined(CONFIG_NEXUS_DUMMY)
 #include "dummy_nexus_client.h"
+#else
+#include "nexus_client.h"
+#endif
 #include "hud_state_machine.h"
 #include "wifi_manager.h"
 
@@ -14,6 +19,7 @@ static void handle_button_press(void)
     hud_state_machine_handle_single_press();
 }
 
+#if defined(CONFIG_NEXUS_DUMMY)
 static void handle_nexus_event(
     const struct hud_event *event
 )
@@ -28,6 +34,8 @@ static void handle_nexus_event(
     }
 }
 
+#endif
+
 static void handle_wifi_state(enum wifi_manager_state state)
 {
     const struct hud_event event = {
@@ -37,6 +45,9 @@ static void handle_wifi_state(enum wifi_manager_state state)
                 ? HUD_CONNECTING : HUD_DISCONNECTED,
     };
     hud_state_machine_handle_event(&event);
+#if !defined(CONFIG_NEXUS_DUMMY)
+    nexus_client_wifi_changed();
+#endif
 }
 
 int main(void)
@@ -50,14 +61,19 @@ int main(void)
         return error;
     }
 
-    error = hud_state_machine_init(true, dummy_nexus_client_send_command);
+    error = hud_state_machine_init(IS_ENABLED(CONFIG_NEXUS_DUMMY), NULL);
 
     if (error != 0) {
         LOG_ERR("HUD state machine initialization failed: %d", error);
         return error;
     }
 
-    //this seems to be mixed in providing a wrapper from single press and not for double?
+    error = vibration_manager_init();
+    if (error) {
+        LOG_ERR("Vibration initialization failed: %d", error);
+        return error;
+    }
+
     error = button_manager_init(handle_button_press, hud_state_machine_handle_double_press);
 
     if (error != 0) {
@@ -65,10 +81,14 @@ int main(void)
         return error;
     }
 
+#if defined(CONFIG_NEXUS_DUMMY)
     error = dummy_nexus_client_start(handle_nexus_event);
+#else
+    error = nexus_client_start();
+#endif
 
     if (error != 0) {
-        LOG_ERR("Dummy Nexus client failed to start: %d", error);
+        LOG_ERR("Nexus event client failed to start: %d", error);
         return error;
     }
 
@@ -81,7 +101,7 @@ int main(void)
     } else {
         /*
          * Preserve the existing driver settling delay.
-         * The display and dummy client are already running.
+         * The display, controller and event client are already running.
          */
         k_sleep(K_SECONDS(3));
 

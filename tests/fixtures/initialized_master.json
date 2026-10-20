@@ -1,0 +1,25 @@
+{
+  "type": "system_initialized",
+  "payload": {
+    "session_name": "HUD ankle run",
+    "site": "master",
+    "subject_ids": [
+      "subject-01"
+    ],
+    "configuration_state": "installed",
+    "initialization_complete": true,
+    "correlation_id": "sanitized-init",
+    "initialization_id": "init-01",
+    "expected_node_ids": [
+      "master",
+      "node-a"
+    ],
+    "node_results": {
+      "node-a": {
+        "initialization_complete": true
+      }
+    },
+    "recovery_required": false
+  },
+  "node_id": "master"
+}

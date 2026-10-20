@@ -18,6 +18,9 @@ int wifi_manager_init(wifi_manager_callback_t callback);
  * -EALREADY and cannot create another worker or bypass the backoff. */
 int wifi_manager_connect(void);
 
+struct net_if;
+/* Read-only interface access for DHCP gateway discovery by the receiver. */
+struct net_if *wifi_manager_get_interface(void);
 bool wifi_manager_is_ready(void);
 enum wifi_manager_state wifi_manager_get_state(void);
 

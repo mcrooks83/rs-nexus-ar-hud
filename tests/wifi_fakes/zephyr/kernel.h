@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <errno.h>
+#include <string.h>
 #define ARG_UNUSED(x) (void)(x)
 #define IS_ENABLED(x) (x)
 #define BUILD_ASSERT(c, msg) _Static_assert(c, msg)
@@ -34,4 +35,21 @@ static inline void k_thread_create(struct k_thread *t, void *stack, size_t size,
 }
 static inline void k_thread_name_set(struct k_thread *t, const char *n)
 { (void)t; (void)n; }
+struct k_msgq { unsigned char *data; size_t size; unsigned capacity, head, count; };
+#define K_MSGQ_DEFINE(n,s,c,a) static unsigned char n##_storage[(s)*(c)]; \
+    struct k_msgq n = {.data=n##_storage,.size=(s),.capacity=(c)}
+static inline int k_msgq_put(struct k_msgq *q, const void *data, k_timeout_t timeout)
+{
+    (void)timeout;
+    if (q->count == q->capacity) return -ENOMSG;
+    memcpy(q->data + ((q->head + q->count) % q->capacity) * q->size, data, q->size);
+    ++q->count; return 0;
+}
+static inline int k_msgq_get(struct k_msgq *q, void *data, k_timeout_t timeout)
+{
+    (void)timeout;
+    if (!q->count) return -ENOMSG;
+    memcpy(data,q->data+q->head*q->size,q->size);
+    q->head=(q->head+1)%q->capacity; --q->count; return 0;
+}
 #endif

@@ -27,4 +27,22 @@ config WIFI_MANAGER_LOG_LEVEL
 
 endmenu
 
+menu "NEIA event client"
+config NEXUS_DUMMY
+    bool "Use simulated events instead of NEIA"
+    default n
+    help
+      Mutually exclusive build-time alternative. No commands reach Core.
+config NEXUS_HOST
+    string "NEIA host override (empty uses DHCP gateway)"
+    default ""
+config NEXUS_PORT
+    int "NEIA WebSocket port"
+    range 1 65535
+    default 8080
+config NEXUS_PATH
+    string "NEIA WebSocket path"
+    default "/api/v1/gateway/events"
+endmenu
+
 source "Kconfig.zephyr"

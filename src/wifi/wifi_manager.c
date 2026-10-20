@@ -204,6 +204,11 @@ int wifi_manager_connect(void)
     return 0;
 }
 
+struct net_if *wifi_manager_get_interface(void)
+{
+    return atomic_get(&initialized) == 2 ? wifi_iface : NULL;
+}
+
 bool wifi_manager_is_ready(void)
 {
     return wifi_manager_get_state() == WIFI_MANAGER_READY;

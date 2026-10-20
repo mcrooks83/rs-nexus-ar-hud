@@ -28,7 +28,7 @@ static void vibration_stop_work_handler(struct k_work *work)
 {
     ARG_UNUSED(work);
 
-    LOG_INF("Stopping vibration motor");
+    LOG_DBG("Stopping vibration motor");
 
     int err = gpio_pin_set_dt(&vibration, 0);
 
@@ -81,7 +81,7 @@ int vibration_manager_pulse(uint32_t duration_ms)
 
     k_work_cancel_delayable(&vibration_stop_work);
 
-    LOG_INF(
+    LOG_DBG(
         "Starting vibration motor for %u ms",
         duration_ms
     );

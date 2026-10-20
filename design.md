@@ -1,69 +1,116 @@
 # Nexus AR HUD design
 
-## Scope and transport
+## Scope and source contracts
 
-The HUD displays Nexus lifecycle events and selected loading-intensity results,
-and supports start/stop control. This supersedes the earlier receive-only scope.
-It does not initialize Core sessions, select algorithms, or request readiness.
-Real transport is **pending**. No bridge, ZeroMQ client, WebSocket connection,
-or compute JSON parser is implemented. The placeholder client/parser files stay
-uncompiled. The only command destination is the asynchronous simulated client.
+The default build receives real NEIA events and displays one subject, two
+Movella DOT sensor slots and `standard_loading_intensity` real-time magnitudes.
+Initialize the session, connect sensors and start/stop acquisition through the
+NEIA UI. Power the HUD on and establish its subscription **before** initializing
+through the UI. No HUD gesture sends a Core command in this phase. The existing
+command enums and requested states remain reusable but are inactive.
 
-Commands use a bounded enum (`START`, `STOP`). A future transport must map these
-to Core commands and deliver events through the same owned event queue. Selecting
-that transport and its recovery/snapshot contract is separate work.
+The client uses NEIA's existing plain WebSocket:
+`ws://<resolved-host>:8050/api/v1/gateway/events`. No new bridge, direct ZeroMQ,
+snapshot, lifecycle replay, or Core/NEIA changes are included.
 
-## Ownership and execution
+Contracts were checked against the workspace sources:
 
-One controller thread owns the screen/session model and all OLED drawing after
-display initialization. Network callbacks, dummy callbacks, GPIO interrupts and
-button work handlers never draw. Producers post fixed-size events with inline
-strings and values to a 32-entry Zephyr message queue. There are no borrowed
-payload pointers. Posting is nonblocking; overflow returns an error and sets a
-controller fault (`Queue full`) rather than failing silently.
+- NEIA `neia-api/app/main.py`, `app/api/gateway.py`, and
+  `app/gateway/{manager,zeromq_client}.py`: transparent event forwarding and the
+  initial unrelated `voice_status` message.
+- Core `nexus_n3/core/core.py`, `core/orchestrators/event_assembler.py`, and
+  `distributed/master_node.py`: completed initialization, sensor connection
+  batches and generic compute envelopes.
+- Algorithm `standard_loading_intensity/{core_schema,core}.py`: real-time stage,
+  four named frequency bands and `axis_values.mag`.
 
-The controller stores Wi-Fi connectivity, Nexus event-source connectivity and
-session lifecycle independently. Connectivity changes never overwrite the
-observed lifecycle or clear results. Selected sensor values are retained in two
-bounded slots. New sessions clear slots; a new official stream waits for fresh
-samples. Unsupported extra locations are rejected with a logged error.
+## Configuration and destination discovery
 
-The controller checks for blink/sample-age updates at least every 500 ms and
-redraws only when the resulting screen changes. Nonselected sensor updates do
-not redraw unchanged content. The former marquee thread is removed. Callback
-paths contain no sleeps. The dummy's dedicated thread may wait for commands or
-its next demonstration deadline without blocking the controller or Wi-Fi.
+Defaults are `CONFIG_NEXUS_HOST=""`, `CONFIG_NEXUS_PORT=8050`, and
+`CONFIG_NEXUS_PATH="/api/v1/gateway/events"`. No master IP needs to be entered.
+With the default topology, the master hosts both the AP and NEIA. The receiver
+uses the Wi-Fi manager's interface and the installed Zephyr API
+`net_if_ipv4_get_gw()` to copy its DHCP-provided IPv4 gateway. It requires Wi-Fi
+READY, a preferred IPv4 address and a usable gateway. Missing/unspecified,
+loopback, multicast and broadcast gateway values keep Nexus disconnected and
+are retried with backoff. The destination is read again on every attempt,
+including after Wi-Fi reconnects; an obsolete gateway is never cached.
+
+For NEIA on another host, set `CONFIG_NEXUS_HOST` to an IPv4 address or DNS name
+(without scheme, port or path). The override takes precedence over gateway
+selection and requires a usable local IPv4 address; it does not require a DHCP
+gateway when the destination is directly reachable. Port and path can be
+configured separately. IPv6, TLS and authentication are outside this phase.
+Each resolved host/port/path is logged once per connection attempt. The gateway
+is only destination discovery, never proof of NEIA or Core health.
+
+`CONFIG_NEXUS_DUMMY=y` selects a mutually exclusive build-time demo. CMake links
+only one event client, and both clients guard repeated starts. The demo emits
+initialization, two sensor slots, warm-up, live data, stop and drain on its own
+dedicated thread. Content has a permanent `Demo ` prefix in that build. The
+simulated command function remains reusable, but the HUD never calls it.
+
+## Ownership and concurrency
+
+One controller thread owns mutable session/sensor state, view selection,
+rendering and vibration decisions. Producers post fixed-size events with inline
+strings, sensor entries and values into the existing 32-entry queue. No queued
+payload points into a socket, JSON token, callback or reused receive buffer.
+Queue overflow is reported as a controller fault and the receiver reconnects
+instead of silently losing stream events. Invalid/unsupported events are logged
+and cannot partially modify slot state.
+
+One dedicated NEIA receiver owns its TCP/WebSocket descriptors and all receive
+buffers. It never renders or pulses the motor. Wi-Fi callbacks only notify it
+through an epoch counter/semaphore; they never perform socket operations. The
+Wi-Fi retry thread and the system work queue used for button debounce remain
+independent. Only the receiver closes its descriptors, avoiding cross-thread
+close/reuse races.
+
+The WebSocket worker waits for Wi-Fi/IP/destination availability, resolves the
+host, connects TCP with a five-second deadline, then performs a three-second
+upgrade. It reports Nexus connecting/connected/disconnected separately from
+Wi-Fi and lifecycle. Failure retries at 1, 2, 4, 8 and at most 15 seconds; a
+successful WebSocket resets its backoff. Wi-Fi loss invalidates the connection
+epoch, causes the receiver to close and preserves retained sensor state. Receive
+waits are bounded to 500 ms; an in-progress handshake/DNS operation may delay
+closure until that bounded operation completes, without blocking the HUD.
+
+Text messages are assembled across partial reads and continuation frames, with
+ping/pong/close handled independently, including control frames between data
+fragments. Client control frames are masked. There are no application/command
+writes. Ping is sent after 15 seconds; missing pong times out after ten seconds.
+An incomplete message also has a ten-second deadline. Close shuts down TCP
+before releasing the wrapper, bounding the library's close handshake.
+
+The installed Zephyr receive function can return a partial payload on timeout
+without updating its type/remainder outputs. A one-byte first read establishes
+frame metadata; subsequent chunks use the known frame type and subtract partial
+byte counts when those outputs are absent. This avoids parsing a partial JSON
+message as a complete event. The HTTP scratch buffer lives for the entire
+WebSocket session and retains any bytes following the upgrade response.
+
+Bounds: 8192 bytes per message, 768 JSON tokens, nesting depth 16, at most 125
+control bytes, 63-character subject/address IDs, 47-character locations/session
+names and two sensor slots. Unknown metadata is structurally skipped. Known
+labels/identities must be printable ASCII (ASCII JSON escapes are supported).
+Malformed JSON, duplicate required keys, excessive strings/tokens/depth,
+nonfinite magnitudes and oversized frames are rejected. A bad complete JSON
+event is skipped; an oversized or invalid frame closes the connection.
+
+The controller checks blink and sample-age updates at least every 500 ms and
+redraws only if the screen changed. Nonselected results do not redraw unchanged
+content. No callback sleeps and no socket operation runs in the controller.
 
 ## Startup
 
-1. Initialize the SSD1306 and its existing 10x16 font.
-2. Start the HUD controller, showing `NEXUS HUD` / `Booting`.
-3. Register the debounced button.
-4. Start the asynchronous dummy, independently of network availability.
-5. Initialize Wi-Fi, retain the existing three-second driver settling delay,
-   and request a connection. Failure is logged and does not stop the HUD.
-
-Vibration is not initialized or used. Its existing source files are retained.
-
-## Connectivity row
-
-The 128x64 monochrome OLED has four 16-pixel rows, with at most 12 text
-characters in each content row. Row 1 is permanently reserved:
-
-- `Wi-Fi` at x=0; circle centered at (58,7).
-- `N3` at x=76; circle centered at (108,7).
-
-Each circle has radius 4 pixels. Disconnected is hollow, connecting alternates
-hollow/filled every 500 ms, and connected is filled. Circles are drawn with
-framebuffer primitives; no Unicode or colour is used. `Demo` in content row 4 identifies simulated screens; on result screens
-it prefixes the numeric value (for example `Demo 12.48`). The status row has
-no separate dummy marker. Indicator positions stay fixed on every screen.
-
-Wi-Fi association is still connecting. Only an available preferred IPv4 address
-makes `Wi-Fi` connected. Connect failure, disconnection or removal of the last
-preferred IPv4 address clears connectivity. Automatic retry/reconnection uses
-the worker described below. Nexus status describes the event source, not acquisition.
-Dummy Nexus connectivity is independent of Wi-Fi.
+1. Initialize the SSD1306 and existing 10x16 font.
+2. Start the controller, showing `NEXUS HUD` / `Booting`.
+3. Initialize the vibration GPIO and register the debounced button.
+4. Start the selected event worker before Wi-Fi. Real mode initially shows
+   waiting; demo mode progresses without an AP.
+5. Initialize Wi-Fi, preserve its three-second driver settling delay and enable
+   the existing asynchronous Wi-Fi recovery worker.
 
 ## Wi-Fi recovery
 
@@ -96,120 +143,140 @@ without a Wi-Fi disconnect event. Unknown driver state never permits a connect.
 ESP32 driver's own reconnect path retries immediately in its event handler and
 provides neither this bounded backoff nor the IP deadline. Enabling both would
 create competing retry owners. The existing ESP32 automatic DHCP startup is
-retained. Real Nexus transport/reconnection remains pending and independent.
+retained. NEIA WebSocket recovery is a separate receiver concern and never restarts
+Wi-Fi or acquisition.
 
-## Content rows (2–4)
+## Initialization, slots and compute projection
 
-| Lifecycle | Row 2 | Row 3 | Row 4 |
+Only `system_initialized` with `initialization_complete: true`, installed
+configuration and exactly one `subject_ids` entry establishes a subject. Both
+standalone and completed master envelopes are supported; `node_initialized` and
+incomplete/recovery workflows never reset the model. Completed initialization
+clears slots, old results and selection. Session metadata is not a sensor roster.
+
+`sensor_connected.payload.subjects[].connected_sensors[]` registers CONNECTED
+sensors by the established subject ID and address, retaining location for the
+label. Separate/repeated batches merge without duplicates, erasing values or
+changing selection. A whole batch is validated before modification. Additional
+subjects or sensors are rejected with a capacity diagnostic, preserving existing
+slots. Each slot starts with exactly `No events` in the value row.
+
+Compute projection accepts only `compute_result` for
+`standard_loading_intensity`, nested stage `real_time`, the established subject
+and a registered address. It finds `band_name == "0-6"` regardless of order,
+requires numeric finite `axis_values.mag`, and accepts zero. Duplicated result
+identities, when present, must agree with the envelope. Only the addressed slot
+updates; its registered location and current selection are retained. Performance,
+other algorithms/stages, `voice_status`, and unrelated events do nothing.
+Lifecycle subject scopes, when supplied, must match the established subject.
+Core errors accept either a payload string or an object with `message`; display
+messages are decoded and safely truncated to 47 characters plus a terminator.
+
+Every accepted compute result causes the controller to request one nonblocking
+50 ms vibration pulse, including results for a nonselected sensor. One delayed
+stop is rescheduled, so closely spaced pulses merge rather than forming a
+backlog. Lifecycle, connections, ignored messages and rejected results do not
+vibrate. The existing GPIO vibration manager provides the pulse and timed stop.
+
+## Four-row OLED and button
+
+The 128x64 monochrome OLED keeps its 10x16 font and maximum 12 characters per
+content row. The permanently reserved top row keeps `Wi-Fi` at x=0 and its
+circle at (58,7), plus `N3` at x=76 and its circle at (108,7). Radius-four circles
+are hollow when disconnected, alternate filled/hollow every 500 ms when
+connecting, and stay filled when connected. `Wi-Fi` requires an actual IP;
+`N3` means the WebSocket is connected, not that Core is streaming or healthy.
+
+With slots available, Ready and official streaming show the selected sensor:
+
+| Row | Before results | Fresh result | Retained stale result |
 |---|---|---|---|
-| Boot | NEXUS HUD | Booting | |
-| No known session | Waiting for | status | |
-| Initialized / drained | Ready | abbreviated session | |
-| START_REQUESTED | Start sent | Waiting | |
-| Warm-up | Warming up | | |
-| Official, before data | LIVE | Waiting data | |
-| Official, fresh result | Left ankle | LI 0-6 Hz | 12.48 |
-| Official, stale result | Left ankle | LI 0-6 STALE | 12.48 |
-| STOP_REQUESTED | Stop sent | Waiting | |
-| Stopped, draining | Finalizing | | |
-| Startup or relevant failure | ERROR | short reason | |
+| 1 | fixed connectivity indicators | same | same |
+| 2 | Left ankle | Left ankle | Left ankle |
+| 3 | LI 0-6 Hz | LI 0-6 Hz | LI 0-6 STALE |
+| 4 | No events | 12.48 | 12.48 |
 
-The table shows lifecycle content; simulated screens additionally show `Demo`
-in row 4 or before the result value.
+`LEFT_ANKLE`/`RIGHT_ANKLE` become readable labels; other labels are clipped safely.
+No wrapping, marquee, invented units or severity thresholds are used. Large magnitudes use compact scientific notation when fixed decimals would
+exceed the row. Demo mode prefixes row 2 with `Demo `,
+clipping the following label to fit; the source is never presented as real.
 
-The title appears only at boot. Session/location/error strings are bounded,
-converted to printable ASCII and clipped deterministically to 12 characters.
-Nothing wraps or scrolls. Numeric output has two decimals (compact scientific notation when needed to
-fit the `Demo` prefix); excessive magnitudes
-show `Out of range`, and nonfinite inputs are rejected. `LI 0-6 Hz` is the
-projected loading-intensity band label, with no invented output unit or severity.
-The current dummy supplies realistic left/right values around 12.48 and 11.76;
-these are demonstration values, not computed Core measurements.
+Before slot registration, lifecycle screens show `Waiting for` / `status`,
+`Ready` / abbreviated session, or `LIVE` / `Waiting data`. Warm-up shows
+`Warming up`, stopped/draining shows `Finalizing`, and failures show `ERROR` /
+a short reason. Drained returns to Ready (or its selected sensor view).
+A new warm-up clears previous run values without unregistering sensors.
 
-On source loss, the indicator becomes hollow and retained values show `STALE`.
-Real-source values would also become stale on Wi-Fi loss. Simulated values do
-not depend on Wi-Fi. Samples also become stale after five seconds without an
-update, with up to 500 ms tick latency. Reconnection alone does not make an old
-sample fresh; each sensor needs a new result. Loss never implies Core stopped
-streaming and never sends a stop command.
+A single debounced press cycles all registered slots, including `No events`
+slots, even while offline. During warm-up it switches to sensor inspection; the next lifecycle event
+restores its concise status. ERROR and Finalizing stay visible and ignore view
+cycling until the lifecycle changes. Incoming
+results never change the selected index. The existing 30 ms debounce and 350 ms
+gesture deferral remain; double press also cycles locally and never transmits.
 
-## Controls and confirmation
+On Wi-Fi or WebSocket loss, slots, selection and values remain. Real values are
+marked stale; reconnect alone does not freshen them. Each sensor needs a new
+accepted result. Samples also become stale after 15 seconds without updates
+(with up to 500 ms tick latency). A slot without a value continues to show
+`No events`. Loss does not imply acquisition stopped and sends no Core command.
 
-GPIO edges schedule 30 ms debounce work. A stable active edge begins a 350 ms
-single-press window; release tracking prevents a held press from repeating.
-The second stable press inside the window cancels the pending single and posts
-a double press. Gesture callbacks only queue events.
+## Limitations and recovery
 
-- Single from READY sends start and enters START_REQUESTED.
-- Single during START_REQUESTED, warm-up or official streaming sends stop and
-  enters STOP_REQUESTED. Stop can supersede a pending start during startup.
-- While stop is pending, further singles send nothing. Start cannot be sent
-  again while awaiting start confirmation. Double presses never send commands.
-- Double during official streaming cycles the retained sensor views locally;
-  outside streaming it does nothing.
-- Source disconnection disables command sending. A future real source would
-  additionally require Wi-Fi connectivity. Dummy controls work without an AP.
+There is no snapshot or lifecycle replay. Events emitted before subscription or
+during disconnection may be missed. Starting the HUD after initialization cannot
+reconstruct the subject/sensor roster. Subscribe before UI initialization; if
+initialization was missed, initialize again through the UI. A live connection is
+not authoritative knowledge of Core state. Recovery preserves only events this
+HUD actually observed and does not interrupt acquisition or operate the UI.
+The scope is one subject/two sensors and one projected algorithm/band, with
+bounded metadata and no dynamic sensor discovery queries.
 
-A successful send only means the command was queued. `stream_started` or
-warm-up events confirm startup, `stream_official_started` confirms live data,
-`stream_stopped` confirms draining, and `stream_drained` returns to Ready.
-A late start confirmation cannot cancel a pending stop. There is no fabricated
-confirmation or command retry on a timeout; transport-level recovery remains
-pending. Send failure produces a short error screen.
+## Validation and hardware procedure
 
-The dummy independently announces connecting, connected, waiting and initialized
-states. It then waits for queued simulated start/stop commands. Start begins
-warm-up, later official streaming and periodic left/right values. Stop interrupts
-startup or streaming, emits stopped, then drained after a simulated delay.
-No readiness command is needed and no real network command is sent.
+Run `bash tests/run.sh` for sanitizer-enabled host tests. Fixtures under
+`tests/fixtures` document their source contracts. Coverage includes standalone/
+master completion, resets, separate/together/repeated slots, independent missing
+values, interleaved address routing, shuffled bands/zero, ignored events and
+malformed/nonfinite/oversized data, queue ownership after buffer reuse, no
+commands, selected/nonselected vibration decisions and merged pulses, stale
+retention, frame/control fragmentation, and gateway/missing/changed/override
+selection. Existing Wi-Fi backoff/DHCP/overlap and button tests remain active.
+Socket/I2C/radio timing is not established by these fake-driver tests.
 
-## Validation
-
-Run `bash tests/run.sh` for host C tests with address/undefined-behaviour
-sanitizers (leak detection disabled for the sandbox). They cover lifecycle and
-request transitions, stop during pending start, duplicate stop suppression,
-no command on double press, view retention/selection, all 18 connectivity/mode
-combinations and both blink phases across every screen state, text bounds,
-numeric limits, sample expiry, reconnect freshness, inline event ownership,
-and GPIO debounce/deferred-single/double/held-press behaviour using fake GPIO
-and deterministic work scheduling. Wi-Fi tests exercise the real retry policy
-and manager iterations with a fake asynchronous driver: initial request failure,
-bounded backoff and cap, reset only on IP, association with stalled DHCP, late IP
-after cancellation, AP loss/recovery, IP removal, duplicate init/connect calls,
-foreign-interface events, callback isolation and no overlapping driver requests.
-Tests advance a fake clock, so they do not sleep for retry intervals.
-
-Build using `bash build.sh` (existing west board, overlay and credentials flow).
-In a restricted environment, use writable cache paths with the equivalent:
+Build using `bash build.sh` (existing west board/overlay/credentials workflow).
+For restricted cache paths, the equivalent is:
 
 ```sh
 source ./env.sh
 export CCACHE_DIR=/tmp/hud-ccache
 export CCACHE_TEMPDIR=/tmp/hud-ccache-tmp
 mkdir -p "$CCACHE_TEMPDIR"
-west build -p always -b xiao_esp32s3/esp32s3/procpu/sense "$APP" \
+west build -b xiao_esp32s3/esp32s3/procpu/sense "$APP" \
   --build-dir "$APP/build" -- \
   -DEXTRA_CONF_FILE="$APP/wifi_credentials.conf" \
-  -DUSER_CACHE_DIR=/tmp/hud-zephyr-cache
+  -DUSER_CACHE_DIR:PATH=/tmp/hud-zephyr-cache
 ```
 
-Hardware acceptance still requires:
+For an isolated demo build, use another build directory and add
+`-DCONFIG_NEXUS_DUMMY=y`. Do not enable real and demo sources together.
 
-- Visible boot with no AP; dummy reaches Ready and responds to controls despite
-  Wi-Fi failure.
-- Boot with the AP unavailable, then enable it: Wi-Fi must connect without a
-  reset. Disable and restore the AP again and check loss/recovery indicators.
-- Association stays blinking until an IP is assigned; AP loss/address removal
-  shows disconnected without changing the session lifecycle.
-- Associate to an AP with DHCP disabled: within 45 seconds, the attempt must be
-  cancelled and retried. Restore DHCP and check eventual recovery.
-- Confirm logs show bounded backoff, reset after IP, and no overlapping attempts.
-- `Demo` is legible in the content area and clearly identifies simulated data.
-- All content fits four rows, with clean hollow/filled circles and no overlap.
-- Single press starts/stops the simulated source; double press changes sensor
-  without first stopping. Repeated presses during pending stop send no duplicate.
-- Start/stop during warm-up, repeated cycles, stale-data display and long runs.
+Hardware acceptance (no flashing performed in this task):
 
-Pixel polarity, physical legibility, I2C updates, actual driver event ordering
-and physical button timing cannot be proven by host tests. No device was flashed
-as part of this change.
+1. Connect the HUD to the master's AP without entering the master's IP.
+2. Confirm both Wi-Fi/N3 indicators become solid and the destination log shows
+   the DHCP gateway with port 8050 and the NEIA events path.
+3. Initialize one subject with two DOTs through the UI.
+4. Connect sensors; cycle through both slots and verify `No events` independently.
+5. Start through the UI; check warm-up and official lifecycle status.
+6. Verify independent loading-intensity updates and short vibration cues,
+   including while the other sensor is selected.
+7. Cycle views while events continue; verify presses never stop acquisition.
+8. Stop through the UI and verify finalization status and return to Ready/view.
+9. Test AP and NEIA loss/reconnection without UI or acquisition disruption.
+   Retained values must show stale; fresh per-sensor events restore freshness.
+10. Boot with the AP absent, enable it, then disable/restore it. Repeat with
+    stalled DHCP and a changed gateway. Verify display/buttons stay responsive.
+11. Check real OLED bounds/polarity/legibility, motor pulse duration/merging and
+    sustained operation at the actual compute rate. Subscription before setup,
+    fragmentation/heartbeats against NEIA and real gateway discovery need device
+    verification beyond the local build and host tests.
