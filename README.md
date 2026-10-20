@@ -9,8 +9,8 @@ The repository currently contains Zephyr firmware targeting the XIAO ESP32S3 Sen
 - Wi-Fi connectivity
 - a 128x64 SSD1306 OLED display
 - a physical button input
-- vibration feedback
-- a HUD state machine for presenting Nexus N3 session and streaming states
+- independent Wi-Fi and Nexus indicators with clear text labels
+- Nexus lifecycle/result screens and asynchronous simulated start/stop control
 
 This HUD is intended to pair with `nexus-n3-core`, the edge-processing component that generates the session and compute data shown in the display:
 
@@ -22,7 +22,24 @@ That repository is not public yet, but it is expected to open soon.
 
 This project is still an experimental prototype.
 
-The firmware and device-state flow are already implemented, but the real Nexus client integration is still being replaced by a dummy event source used to simulate connection, session initialization, and streaming transitions. Until that is swapped for the actual Nexus transport, this repository should be treated as a hardware and interaction prototype rather than a finished product.
+The firmware uses a simulated Nexus event source and command destination.
+The OLED starts before Wi-Fi and remains usable without an access point. The status row uses `Wi-Fi` and `N3` labels.
+`Demo` in the content area identifies simulated screens and results.
+
+Wi-Fi automatically retries after failure or loss with 1, 2, 4, 8, then
+15-second maximum backoff. Obtaining an IP resets backoff; association/DHCP has
+a 45-second attempt deadline. One Wi-Fi worker owns recovery independently of
+the OLED and button handlers.
+
+Single press starts from Ready or stops during startup/streaming. Double press
+cycles left/right sensor views while streaming, without sending stop. Single
+presses are deferred for 350 ms to distinguish the gestures. Lifecycle events
+confirm command effects; pending commands do not imply acquisition has changed.
+
+Real transport is pending. No bridge, ZeroMQ client or WebSocket connection is
+implemented. See [design.md](design.md) for screens, ownership, controls and
+hardware acceptance checks. Run `bash tests/run.sh` for focused host tests and
+`bash build.sh` for the existing Zephyr build workflow.
 
 ## Notes
 

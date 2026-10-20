@@ -3,14 +3,9 @@
 #ifndef NEXUS_MESSAGES_H
 #define NEXUS_MESSAGES_H
 
-#define NEXUS_CMD_IS_SERVER_READY \
-    "is_server_ready"
-
-#define NEXUS_CMD_START_STREAM_FOR_ALL \
-    "start_stream_for_all"
-
-#define NEXUS_CMD_STOP_STREAM_FOR_ALL \
-    "stop_stream_for_all"
+/* Future wire mapping; readiness is observed, never requested. */
+#define NEXUS_CMD_START_STREAM_FOR_ALL "start_stream_for_all"
+#define NEXUS_CMD_STOP_STREAM_FOR_ALL "stop_stream_for_all"
 
 #define NEXUS_EVT_SERVER_READY \
     "server_ready"

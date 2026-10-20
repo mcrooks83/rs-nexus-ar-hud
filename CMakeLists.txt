@@ -16,9 +16,10 @@ target_include_directories(app PRIVATE
 target_sources(app PRIVATE
     src/main.c
     src/wifi/wifi_manager.c
-    src/vibration/vibration_manager.c
+    src/wifi/wifi_retry.c
     src/button/button_manager.c
     src/display/display_manager.c
+    src/state_machine/hud_model.c
     src/state_machine/hud_state_machine.c
     src/dummy/dummy_nexus_client.c
 )

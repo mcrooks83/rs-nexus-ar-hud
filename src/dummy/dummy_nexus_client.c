@@ -1,193 +1,77 @@
 #include "dummy_nexus_client.h"
-
 #include <errno.h>
-#include <string.h>
-
 #include <zephyr/kernel.h>
-#include <zephyr/logging/log.h>
-
-LOG_MODULE_REGISTER(dummy_nexus_client, LOG_LEVEL_INF);
-
-#define DUMMY_THREAD_STACK_SIZE 2048
-#define DUMMY_THREAD_PRIORITY   7
-
-#define CMD_IS_SERVER_READY \
-    "is_server_ready"
-
-#define CMD_START_STREAM_FOR_ALL \
-    "start_stream_for_all"
-
-#define CMD_STOP_STREAM_FOR_ALL \
-    "stop_stream_for_all"
-
-static dummy_nexus_event_callback_t event_callback;
-
-static struct k_thread dummy_thread;
-
-static K_THREAD_STACK_DEFINE(
-    dummy_thread_stack,
-    DUMMY_THREAD_STACK_SIZE
-);
-
-
-// create a dummy session
-static struct hud_session dummy_session = {
-    .name = "Ankle Test",
-    .algorithm = "Loading Intensity",
-    .sensor_name = "Movella DOT",
-    .sensor_count = 2,
-    .subjects = {
-        {
-            .id = "subject-01",
-            .name = "Subject 1",
-        },
-    },
-    .subject_count = 1,
-    .result_count = 0,
-    .selected_result_index = 0,
-};
-
-// function to emit a dummy event
-static void emit_event(
-    const struct hud_event *event
-)
+static dummy_nexus_event_callback_t emit;
+static struct k_thread thread;
+static K_THREAD_STACK_DEFINE(stack, 2048);
+K_MSGQ_DEFINE(commands, sizeof(enum hud_command), 8, 4);
+static bool started;
+static void lifecycle(enum hud_event_type type)
 {
-    if (event_callback != NULL) {
-        event_callback(event);
-    }
+    const struct hud_event event = {.type = type};
+    emit(&event);
 }
-
-static void dummy_thread_entry(
-    void *arg1,
-    void *arg2,
-    void *arg3
-)
+static void run(void *a, void *b, void *c)
 {
-    ARG_UNUSED(arg1);
-    ARG_UNUSED(arg2);
-    ARG_UNUSED(arg3);
-
-    struct hud_event event = {
-        .type = HUD_EVENT_CONNECTION_STARTED,
-    };
-
-    emit_event(&event);
-
+    ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
     k_sleep(K_SECONDS(2));
-
-    event.type = HUD_EVENT_SERVER_CONNECTED;
-    emit_event(&event);
-
-    /*
-     * The state machine will later send is_server_ready.
-     * For this first dummy, the connection sequence stops here
-     * until that command is received.
-     */
-
+    struct hud_event source = {.type = HUD_EVENT_SOURCE,
+        .connection = HUD_CONNECTING, .dummy = true};
+    emit(&source);
+    k_sleep(K_SECONDS(2));
+    source.connection = HUD_CONNECTED;
+    emit(&source);
+    lifecycle(HUD_EVENT_SERVER_READY);
+    k_sleep(K_SECONDS(3));
+    const struct hud_event session = {.type = HUD_EVENT_SYSTEM_INITIALIZED,
+                                      .session_name = "Ankle demo"};
+    emit(&session);
+    unsigned phase = 0, samples = 0;
+    int64_t deadline = 0;
     while (true) {
-        k_sleep(K_FOREVER);
+        enum hud_command command;
+        int64_t now = k_uptime_get();
+        k_timeout_t timeout = phase ? K_MSEC(MAX(0, deadline - now)) : K_FOREVER;
+        if (!k_msgq_get(&commands, &command, timeout)) {
+            if (command == HUD_CMD_START && phase == 0) {
+                lifecycle(HUD_EVENT_STREAM_STARTED);
+                lifecycle(HUD_EVENT_STREAM_WARMUP_STARTED);
+                phase = 1; deadline = k_uptime_get() + 3000;
+            } else if (command == HUD_CMD_STOP && (phase == 1 || phase == 2 || phase == 3)) {
+                lifecycle(HUD_EVENT_STREAM_STOPPED);
+                phase = 4; deadline = k_uptime_get() + 3000;
+            }
+            continue;
+        }
+        if (phase == 1) {
+            lifecycle(HUD_EVENT_STREAM_OFFICIAL_STARTED);
+            phase = 2; deadline = k_uptime_get() + 2000;
+        } else if (phase == 2 || phase == 3) {
+            struct hud_event left = {.type = HUD_EVENT_COMPUTE_RESULT,
+                .location = "Left ankle", .value = 12.48f + (samples % 5) * 0.21f};
+            struct hud_event right = {.type = HUD_EVENT_COMPUTE_RESULT,
+                .location = "Right ankle", .value = 11.76f + (samples % 4) * 0.18f};
+            emit(&left); emit(&right); ++samples;
+            phase = 3; deadline = k_uptime_get() + 1000;
+        } else if (phase == 4) {
+            lifecycle(HUD_EVENT_STREAM_DRAINED);
+            phase = 0;
+        }
     }
 }
-
-int dummy_nexus_client_start(
-    dummy_nexus_event_callback_t callback
-)
+int dummy_nexus_client_start(dummy_nexus_event_callback_t callback)
 {
-    if (callback == NULL) {
-        return -EINVAL;
-    }
-
-    event_callback = callback;
-
-    k_thread_create(
-        &dummy_thread,
-        dummy_thread_stack,
-        K_THREAD_STACK_SIZEOF(dummy_thread_stack),
-        dummy_thread_entry,
-        NULL,
-        NULL,
-        NULL,
-        DUMMY_THREAD_PRIORITY,
-        0,
-        K_NO_WAIT
-    );
-
-    k_thread_name_set(
-        &dummy_thread,
-        "dummy_nexus"
-    );
-
-    LOG_INF("Dummy Nexus client started");
-
+    if (!callback) return -EINVAL;
+    if (started) return -EALREADY;
+    started = true; emit = callback;
+    k_thread_create(&thread, stack, K_THREAD_STACK_SIZEOF(stack), run,
+                    NULL, NULL, NULL, 7, 0, K_NO_WAIT);
+    k_thread_name_set(&thread, "dummy_nexus");
     return 0;
 }
-
-int dummy_nexus_client_send_command(
-    const char *command
-)
+int dummy_nexus_client_send_command(enum hud_command command)
 {
-    if (command == NULL) {
-        return -EINVAL;
-    }
-
-    LOG_INF("Dummy command received: %s", command);
-
-    if (strcmp(command, CMD_IS_SERVER_READY) == 0) {
-        struct hud_event ready_event = {
-            .type = HUD_EVENT_SERVER_READY,
-        };
-
-        emit_event(&ready_event);
-
-        //k_sleep(K_MSEC(500));
-        k_sleep(K_SECONDS(2));
-
-        struct hud_event initialized_event = {
-            .type = HUD_EVENT_SYSTEM_INITIALIZED,
-            .session = &dummy_session,
-        };
-
-        emit_event(&initialized_event);
-
-        return 0;
-    }
-
-    if (strcmp(command, CMD_START_STREAM_FOR_ALL) == 0) {
-        struct hud_event event = {
-            .type = HUD_EVENT_STREAM_STARTED,
-        };
-
-        emit_event(&event);
-
-        k_sleep(K_MSEC(500));
-
-        event.type = HUD_EVENT_STREAM_WARMUP_STARTED;
-        emit_event(&event);
-
-        k_sleep(K_SECONDS(1));
-
-        event.type = HUD_EVENT_STREAM_OFFICIAL_STARTED;
-        emit_event(&event);
-
-        return 0;
-    }
-
-    if (strcmp(command, CMD_STOP_STREAM_FOR_ALL) == 0) {
-        struct hud_event event = {
-            .type = HUD_EVENT_STREAM_STOPPED,
-        };
-
-        emit_event(&event);
-
-        k_sleep(K_MSEC(500));
-
-        event.type = HUD_EVENT_STREAM_DRAINED;
-        emit_event(&event);
-
-        return 0;
-    }
-
-    LOG_WRN("Unsupported dummy command: %s", command);
-
-    return -ENOTSUP;
+    if (!started) return -ENODEV;
+    if (command != HUD_CMD_START && command != HUD_CMD_STOP) return -EINVAL;
+    return k_msgq_put(&commands, &command, K_NO_WAIT);
 }

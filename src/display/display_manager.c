@@ -1,142 +1,16 @@
 #include "display_manager.h"
-
 #include <errno.h>
 #include <string.h>
-
 #include <zephyr/device.h>
 #include <zephyr/display/cfb.h>
 #include <zephyr/drivers/display.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
-
 LOG_MODULE_REGISTER(display_manager, LOG_LEVEL_INF);
-
 #define DISPLAY_NODE DT_CHOSEN(zephyr_display)
-
-#if !DT_NODE_HAS_STATUS(DISPLAY_NODE, okay)
-#error "No enabled zephyr,display device found"
-#endif
-
-#define MARQUEE_STACK_SIZE  2048
-#define MARQUEE_PRIORITY    7
-#define MARQUEE_TEXT_MAX    64
-#define MARQUEE_STEP_PIXELS 4
-#define MARQUEE_DELAY_MS    1
-
-static const struct device *display =
-    DEVICE_DT_GET(DISPLAY_NODE);
-
-static char marquee_text[MARQUEE_TEXT_MAX];
-
-static uint16_t display_width;
-
-/*
- * Retained in case vertical centering is restored later.
- */
-static uint16_t display_height;
-
-static uint8_t font_width;
-
-/*
- * Retained in case vertical centering is restored later.
- */
-static uint8_t font_height;
-
-static struct k_thread marquee_thread;
-
-static K_THREAD_STACK_DEFINE(
-    marquee_stack,
-    MARQUEE_STACK_SIZE
-);
-
-static bool marquee_started;
-
-static void marquee_thread_entry(
-    void *arg1,
-    void *arg2,
-    void *arg3
-)
-{
-    ARG_UNUSED(arg1);
-    ARG_UNUSED(arg2);
-    ARG_UNUSED(arg3);
-
-    while (true) {
-        size_t text_length = strlen(marquee_text);
-
-        int text_width =
-            (int)(text_length * font_width);
-
-        /*
-         * Display the text at the top of the screen.
-         */
-        int y = 0;
-
-        /*
-         * To restore vertical centering, replace the line above with:
-         *
-         * int y =
-         *     ((int)display_height - (int)font_height) / 2;
-         */
-
-        /*
-         * Begin just beyond the right edge and move left.
-         */
-        for (int x = (int)display_width;
-             x > -text_width;
-             x -= MARQUEE_STEP_PIXELS) {
-
-            int err = cfb_framebuffer_clear(
-                display,
-                false
-            );
-
-            if (err != 0) {
-                LOG_ERR(
-                    "Failed to clear framebuffer: %d",
-                    err
-                );
-
-                break;
-            }
-
-            err = cfb_draw_text(
-                display,
-                marquee_text,
-                x,
-                y
-            );
-
-            if (err != 0) {
-                LOG_ERR(
-                    "Failed to draw marquee text: %d",
-                    err
-                );
-
-                break;
-            }
-
-            err = cfb_framebuffer_finalize(display);
-
-            if (err != 0) {
-                LOG_ERR(
-                    "Failed to update display: %d",
-                    err
-                );
-
-                break;
-            }
-
-            k_sleep(K_MSEC(MARQUEE_DELAY_MS));
-        }
-
-        /*
-         * Pause briefly before restarting at the right.
-         */
-        k_sleep(K_MSEC(50));
-    }
-}
-
+static const struct device *display = DEVICE_DT_GET(DISPLAY_NODE);
+static uint16_t display_width, display_height;
+static uint8_t font_width, font_height;
 int display_manager_init(void)
 {
     if (!device_is_ready(display)) {
@@ -192,18 +66,21 @@ int display_manager_init(void)
         return err;
     }
 
+    if (font_width != 10 || font_height != 16) return -ENOTSUP;
+    err = cfb_framebuffer_set_font(display, 0);
+    if (err) return err;
+
     display_width = cfb_get_display_parameter(
         display,
         CFB_DISPLAY_WIDTH
     );
 
-    /*
-     * Retained for optional vertical centering.
-     */
     display_height = cfb_get_display_parameter(
         display,
         CFB_DISPLAY_HEIGHT
     );
+
+    if (display_width != 128 || display_height != 64) return -ENOTSUP;
 
     err = cfb_framebuffer_clear(
         display,
@@ -241,150 +118,35 @@ int display_manager_init(void)
     return 0;
 }
 
-int display_manager_show_text(const char *text)
+
+static int indicator(int x, enum hud_connection state, bool blink)
 {
-    if (text == NULL) {
-        return -EINVAL;
+    struct cfb_position center = {.x = x, .y = 7};
+    int err = cfb_draw_circle(display, &center, 4);
+    if (err) return err;
+    if (state == HUD_CONNECTED || (state == HUD_CONNECTING && blink)) {
+        for (int dy = -3; dy <= 3; ++dy) {
+            for (int dx = -3; dx <= 3; ++dx) {
+                if (dx * dx + dy * dy > 10) continue;
+                struct cfb_position point = {.x = x + dx, .y = 7 + dy};
+                err = cfb_draw_point(display, &point);
+                if (err) return err;
+            }
+        }
     }
-
-    int err = cfb_framebuffer_clear(
-        display,
-        false
-    );
-
-    if (err != 0) {
-        return err;
-    }
-
-    err = cfb_draw_text(
-        display,
-        text,
-        0,
-        0
-    );
-
-    if (err != 0) {
-        return err;
-    }
-
-    return cfb_framebuffer_finalize(display);
-}
-
-int display_manager_start_marquee(const char *text)
-{
-    if (text == NULL || text[0] == '\0') {
-        return -EINVAL;
-    }
-
-    if (marquee_started) {
-        return -EALREADY;
-    }
-
-    size_t text_length = strlen(text);
-
-    if (text_length >= sizeof(marquee_text)) {
-        return -ENAMETOOLONG;
-    }
-
-    strcpy(marquee_text, text);
-
-    k_thread_create(
-        &marquee_thread,
-        marquee_stack,
-        K_THREAD_STACK_SIZEOF(marquee_stack),
-        marquee_thread_entry,
-        NULL,
-        NULL,
-        NULL,
-        MARQUEE_PRIORITY,
-        0,
-        K_NO_WAIT
-    );
-
-    k_thread_name_set(
-        &marquee_thread,
-        "oled_marquee"
-    );
-
-    marquee_started = true;
-
     return 0;
 }
-
-int display_manager_show_lines(
-    const char *line1,
-    const char *line2,
-    const char *line3,
-    const char *line4
-)
+int display_manager_render(const struct hud_screen *s)
 {
-    const char *lines[] = {
-        line1,
-        line2,
-        line3,
-        line4,
-    };
-
-    int err = cfb_framebuffer_clear(
-        display,
-        false
-    );
-
-    if (err != 0) {
-        LOG_ERR(
-            "Failed to clear framebuffer: %d",
-            err
-        );
-
-        return err;
+    int err = cfb_framebuffer_clear(display, false);
+    if (err) return err;
+    if ((err = cfb_draw_text(display, "Wi-Fi", 0, 0)) ||
+        (err = cfb_draw_text(display, "N3", 76, 0)) ||
+        (err = indicator(58, s->wifi, s->blink)) ||
+        (err = indicator(108, s->source, s->blink))) return err;
+    for (unsigned i = 0; i < 3; ++i) {
+        if (strnlen(s->lines[i], HUD_COLS + 1) > HUD_COLS) return -EINVAL;
+        if ((err = cfb_draw_text(display, s->lines[i], 0, (i + 1) * 16))) return err;
     }
-
-    for (size_t index = 0;
-         index < ARRAY_SIZE(lines);
-         ++index) {
-
-        if (lines[index] == NULL ||
-            lines[index][0] == '\0') {
-            continue;
-        }
-
-        int y =
-            (int)index * (int)font_height;
-
-        /*
-         * Stop if the next line would begin outside the
-         * physical display.
-         */
-        if (y >= (int)display_height) {
-            break;
-        }
-
-        err = cfb_draw_text(
-            display,
-            lines[index],
-            0,
-            y
-        );
-
-        if (err != 0) {
-            LOG_ERR(
-                "Failed to draw line %u: %d",
-                (unsigned int)index,
-                err
-            );
-
-            return err;
-        }
-    }
-
-    err = cfb_framebuffer_finalize(display);
-
-    if (err != 0) {
-        LOG_ERR(
-            "Failed to update display: %d",
-            err
-        );
-    }
-
-    return err;
+    return cfb_framebuffer_finalize(display);
 }

@@ -12,7 +12,10 @@ enum wifi_manager_state {
     WIFI_MANAGER_ERROR,
 };
 
-int wifi_manager_init(void);
+typedef void (*wifi_manager_callback_t)(enum wifi_manager_state state);
+int wifi_manager_init(wifi_manager_callback_t callback);
+/* Enables automatic connection/recovery. Nonblocking; repeated calls return
+ * -EALREADY and cannot create another worker or bypass the backoff. */
 int wifi_manager_connect(void);
 
 bool wifi_manager_is_ready(void);

@@ -1,14 +1,7 @@
 #ifndef DISPLAY_MANAGER_H
 #define DISPLAY_MANAGER_H
-
+#include "hud_state_machine.h"
 int display_manager_init(void);
-int display_manager_show_text(const char *text);
-int display_manager_start_marquee(const char *text);
-int display_manager_show_lines(
-    const char *line1,
-    const char *line2,
-    const char *line3,
-    const char *line4
-);
-
+/* Called exclusively by the HUD controller. Always includes the status row. */
+int display_manager_render(const struct hud_screen *screen);
 #endif

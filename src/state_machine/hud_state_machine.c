@@ -1,306 +1,72 @@
 #include "hud_state_machine.h"
-
-#include <errno.h>
-#include <string.h>
-
-#include <zephyr/logging/log.h>
-
 #include "display_manager.h"
-
-LOG_MODULE_REGISTER(hud_state_machine, LOG_LEVEL_INF);
-
-/*
-    the state machine must have a means to
-    1. set the state
-    2. initialise the state machine
-    3. handle events
-    4. transition states via button presses
-    5. get the current state
-    6. render the states on the display
-*/
-
-// starting point
-static enum hud_state current_state = HUD_STATE_BOOTING;
-
-static hud_send_command_fn send_command_callback;
-
-static struct hud_session current_session;
-
-/*
- * Render the current state.
- *
- * This function only decides what content appears on the OLED.
- * It must not send commands, reconnect, or change state.
- */
-static void render_current_state(void)
+#include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/sys/atomic.h>
+#include <string.h>
+LOG_MODULE_REGISTER(hud_controller, LOG_LEVEL_INF);
+K_MSGQ_DEFINE(hud_events, sizeof(struct hud_event), 32, 4);
+static K_THREAD_STACK_DEFINE(controller_stack, 3072);
+static struct k_thread controller_thread;
+static atomic_t overflow;
+static struct hud_model model;
+static hud_send_command_fn send_command;
+static void controller(void *a, void *b, void *c)
 {
-    switch (current_state) {
-    case HUD_STATE_BOOTING:
-        display_manager_show_lines(
-            "Nexus AR HUD",
-            "Booting...",
-            NULL,
-            NULL
-        );
-        break;
-
-    case HUD_STATE_CONNECTING:
-        display_manager_show_lines(
-            "Nexus AR HUD",
-            "Connecting...",
-            NULL,
-            NULL
-        );
-        break;
-
-    case HUD_STATE_CONNECTED:
-        display_manager_show_lines(
-            "Server connected",
-            NULL,
-            NULL,
-            NULL
-        );
-        break;
-
-    case HUD_STATE_CHECKING_SERVER_READY:
-        display_manager_show_lines(
-            "Server connected",
-            "Checking ready...",
-            NULL,
-            NULL
-        );
-        break;
-
-    case HUD_STATE_WAITING_FOR_SYSTEM_INITIALIZED:
-        display_manager_show_lines(
-            "Server ready",
-            "Waiting for",
-            "session...",
-            NULL
-        );
-        break;
-
-    case HUD_STATE_READY:
-        display_manager_show_lines(
-            current_session.name,
-            current_session.algorithm,
-            current_session.sensor_name,
-            "Ready"
-        );
-        break;
-
-    case HUD_STATE_START_REQUESTED:
-        display_manager_show_lines(
-            "Starting stream",
-            "Request sent",
-            NULL,
-            NULL
-        );
-        break;
-
-    case HUD_STATE_WARMING_UP:
-        display_manager_show_lines(
-            "Starting stream",
-            "Warming up...",
-            NULL,
-            NULL
-        );
-        break;
-
-    case HUD_STATE_STREAMING:
-        display_manager_show_lines(
-            current_session.name,
-            "Streaming",
-            "Waiting for data",
-            NULL
-        );
-        break;
-
-    case HUD_STATE_STOP_REQUESTED:
-        display_manager_show_lines(
-            "Stopping stream",
-            "Request sent",
-            NULL,
-            NULL
-        );
-        break;
-
-    case HUD_STATE_DRAINING:
-        display_manager_show_lines(
-            "Stream stopped",
-            "Finalizing data",
-            NULL,
-            NULL
-        );
-        break;
-
-    case HUD_STATE_ERROR:
-        display_manager_show_lines(
-            "Nexus AR HUD",
-            "System error",
-            NULL,
-            NULL
-        );
-        break;
-
-    default:
-        break;
+    ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
+    struct hud_screen previous = {0}, screen;
+    bool first = true;
+    while (true) {
+        int64_t now = k_uptime_get();
+        if (atomic_set(&overflow, 0)) {
+            struct hud_event fault = {.type = HUD_EVENT_ERROR, .message = "Queue full"};
+            hud_model_apply(&model, &fault, now);
+        }
+        hud_model_screen(&model, now, (now / 500) % 2, &screen);
+        if (first || memcmp(&screen, &previous, sizeof(screen))) {
+            int err = display_manager_render(&screen);
+            if (err) LOG_ERR("OLED update failed: %d", err);
+            else { previous = screen; first = false; }
+        }
+        struct hud_event event;
+        /* Timeout supplies blink and sample-age ticks, never sleeps a callback. */
+        if (!k_msgq_get(&hud_events, &event, K_MSEC(500))) {
+            int err = hud_model_apply(&model, &event, k_uptime_get());
+            if (err) LOG_WRN("Event %d rejected: %d", event.type, err);
+            if (model.outgoing != HUD_CMD_NONE && send_command(model.outgoing)) {
+                const struct hud_event fault = {.type = HUD_EVENT_ERROR,
+                                                 .message = "Send failed"};
+                hud_model_apply(&model, &fault, k_uptime_get());
+            }
+        }
     }
 }
-
-
-// sets the new state
-static void set_state(enum hud_state state){
-    current_state = state;
-    LOG_INF("HUD state changed: %d", state);
-
-    render_current_state();
-}
-
-// initialise the state machine by passing in a send command callback 
-int hud_state_machine_init(
-    hud_send_command_fn send_command
-)
+int hud_state_machine_init(bool dummy, hud_send_command_fn send)
 {
-    if (send_command == NULL) {
-        return -EINVAL;
-    }
-
-    send_command_callback = send_command;
-
-    // creates a current session in memory
-    memset(
-        &current_session,
-        0,
-        sizeof(current_session)
-    );
-
-    // set the starting point state (again to be sure)
-    set_state(HUD_STATE_BOOTING);
-
-    LOG_INF("HUD state machine initialized");
-
+    if (!send) return -EINVAL;
+    send_command = send;
+    hud_model_init(&model, dummy);
+    k_thread_create(&controller_thread, controller_stack,
+                    K_THREAD_STACK_SIZEOF(controller_stack), controller,
+                    NULL, NULL, NULL, 6, 0, K_NO_WAIT);
+    k_thread_name_set(&controller_thread, "hud_controller");
     return 0;
 }
-
-// handle an event
-int hud_state_machine_handle_event(
-    const struct hud_event *event
-)
+int hud_state_machine_handle_event(const struct hud_event *event)
 {
-    if (event == NULL) {
-        return -EINVAL;
-    }
-
-    switch (event->type) {
-    case HUD_EVENT_CONNECTION_STARTED:
-        set_state(HUD_STATE_CONNECTING);
-        break;
-
-    case HUD_EVENT_SERVER_CONNECTED:{
-        set_state(HUD_STATE_CONNECTED);
-        set_state(HUD_STATE_CHECKING_SERVER_READY);
-
-        //when the sever is connected we should send the is_server_ready command
-        int error = send_command_callback(
-            "is_server_ready"
-        );
-        // if the error is non zero it failed
-        if( error !=0 ){
-            // log the error
-            LOG_ERR(
-                "Failed to request server readiness: %d",
-                error
-            );
-            //return to the previous state to essentially try again
-            set_state(HUD_STATE_CONNECTING);
-            return error;
-        }
-        
-        break;
-    }
-    case HUD_EVENT_SERVER_DISCONNECTED:
-        set_state(HUD_STATE_CONNECTING);
-        break;
-
-    case HUD_EVENT_SERVER_READY:
-        set_state(
-            HUD_STATE_WAITING_FOR_SYSTEM_INITIALIZED
-        );
-        break;
-
-    case HUD_EVENT_SYSTEM_INITIALIZED:
-        if (event->session == NULL) {
-            return -EINVAL;
-        }
-
-        memcpy(
-            &current_session,
-            event->session,
-            sizeof(current_session)
-        );
-
-        set_state(HUD_STATE_READY);
-        break;
-
-    case HUD_EVENT_STREAM_STARTED:
-    case HUD_EVENT_STREAM_WARMUP_STARTED:
-        set_state(HUD_STATE_WARMING_UP);
-        break;
-
-    case HUD_EVENT_STREAM_OFFICIAL_STARTED:
-        set_state(HUD_STATE_STREAMING);
-        break;
-
-    case HUD_EVENT_STREAM_STOPPED:
-        set_state(HUD_STATE_DRAINING);
-        break;
-
-    case HUD_EVENT_STREAM_DRAINED:
-        set_state(HUD_STATE_READY);
-        break;
-
-    case HUD_EVENT_STREAM_STARTUP_RETRY:
-        LOG_WRN("Stream startup retry");
-        break;
-
-    case HUD_EVENT_STREAM_STARTUP_FAILED:
-    case HUD_EVENT_ERROR:
-        set_state(HUD_STATE_ERROR);
-        break;
-
-    case HUD_EVENT_COMPUTE_RESULT:
-        /*
-         * Compute-result storage will be added next.
-         */
-        break;
-
-    default:
-        return -ENOTSUP;
-    }
-
-    return 0;
+    if (!event) return -EINVAL;
+    int err = k_msgq_put(&hud_events, event, K_NO_WAIT);
+    if (err) atomic_set(&overflow, 1);
+    return err;
 }
-
-// handle button presses
 void hud_state_machine_handle_single_press(void)
 {
-    /*
-     * Start and stop command handling will be added once
-     * the dummy command sender exists.
-     */
+    const struct hud_event event = {.type = HUD_EVENT_BUTTON};
+    hud_state_machine_handle_event(&event);
 }
 
 void hud_state_machine_handle_double_press(void)
 {
-    /*
-     * Metric selection will be added after compute-result
-     * storage is implemented.
-     */
-}
-
-// get the current state
-enum hud_state hud_state_machine_get_state(void)
-{
-    return current_state;
+    const struct hud_event event = {.type = HUD_EVENT_DOUBLE_BUTTON};
+    hud_state_machine_handle_event(&event);
 }
