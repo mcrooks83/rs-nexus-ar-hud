@@ -18,12 +18,14 @@ static bool bounded(const char *s, size_t size)
 {
     return s[0] && memchr(s, 0, size);
 }
+
 void hud_model_init(struct hud_model *m, bool dummy)
 {
     memset(m, 0, sizeof(*m));
     m->state = HUD_STATE_BOOTING;
     m->dummy = dummy;
 }
+
 static int slot(const struct hud_model *m, const char *address)
 {
     for (unsigned i = 0; i < m->count; ++i)

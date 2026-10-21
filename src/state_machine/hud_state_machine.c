@@ -22,23 +22,31 @@ static void process_event(const struct hud_event *event)
         if (pulse_err) LOG_WRN("Vibration failed: %d", pulse_err);
     }
 }
+
+//using k_thead_create and executing this function requires 3 arguments by Zephyr API
+//the arguments are passed in when the thread is created
+//in this case we pass in NULL for all three and use a global variable for the model and event queue
 static void controller(void *a, void *b, void *c)
 {
     ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
     struct hud_screen previous = {0}, screen;
     bool first = true;
+    // controller thread loop. 
     while (true) {
         int64_t now = k_uptime_get();
         if (atomic_set(&overflow, 0)) {
             struct hud_event fault = {.type = HUD_EVENT_ERROR, .message = "Queue full"};
             hud_model_apply(&model, &fault, now);
         }
+
         hud_model_screen(&model, now, (now / 500) % 2, &screen);
+        
         if (first || memcmp(&screen, &previous, sizeof(screen))) {
             int err = display_manager_render(&screen);
             if (err) LOG_ERR("OLED update failed: %d", err);
             else { previous = screen; first = false; }
         }
+
         struct hud_event event;
         /* Timeout supplies blink and sample-age ticks, never sleeps a callback. */
         if (!k_msgq_get(&hud_events, &event, K_MSEC(500))) {
@@ -46,6 +54,7 @@ static void controller(void *a, void *b, void *c)
         }
     }
 }
+//dummy is used to decide if the application uses a live nexus neia endpoint
 int hud_state_machine_init(bool dummy, hud_send_command_fn send)
 {
     ARG_UNUSED(send); /* No command transmission in this phase. */
@@ -56,6 +65,7 @@ int hud_state_machine_init(bool dummy, hud_send_command_fn send)
     k_thread_name_set(&controller_thread, "hud_controller");
     return 0;
 }
+
 int hud_state_machine_handle_event(const struct hud_event *event)
 {
     if (!event) return -EINVAL;
